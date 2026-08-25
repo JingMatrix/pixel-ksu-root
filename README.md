@@ -45,6 +45,10 @@ The flow honors this binding: it resolves the installed manager's APK path (`pm 
 
 Late-load daemonizes and re-enforces SELinux in its forked child, which tears down the exploit's temporary-su daemon; verification therefore must not go through su. Instead the loaded driver is queried directly through its syscall surface, reachable from a plain shell with no root: `ksud debug version` is polled and the reported kernel version parsed. A non-empty, non-zero version confirms the driver is resident and answering. The driver install path is the `reboot(2)` magic → install-fd → `KSU_IOCTL_GET_INFO` mechanism (`reboot(0xDEADBEEF, 0xCAFEBABE, 0, &fd)` installs an anonymous `[ksu_driver]` fd; `GET_INFO` returns `{version, flags, features, uapi_version}`), with the legacy `prctl(0xDEADBEEF, …)` channel probed as fallback. The same probe run at startup short-circuits the whole flow when the module is already resident for the current boot.
 
+### (f) Staging teardown
+
+The exploit stages its temporary su at `/apex/com.android.virt/bin/su`, on a tmpfs mounted over that apex bin directory inside adbd's mount namespace, because that directory precedes `/system/bin` in the shell `PATH` — so a bare `su` in `adb shell` reaches the temporary one while the flow is running. Late-load then tears the temp-su daemon down (see (e)) without removing the shadow, which leaves a bare `adb shell su` running an orphaned client that fails with `su: connect daemon: Permission denied` even though root is working, and leaves the apex's real binaries (`crosvm`, `virtmgr`, `vm`, …) hidden. Once verification reports a live driver, the flow unmounts the staging tmpfs — through KernelSU's own `/system/bin/su`, since the exploit's daemon is already gone — removes the temp-su client, socket and log, and reports which `su` a plain `adb shell` now resolves. It is best-effort: on failure it warns with the manual `umount` command instead of failing the run, and a reboot clears the mount regardless.
+
 ## Usage
 
 ### Prerequisites

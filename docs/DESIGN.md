@@ -330,6 +330,32 @@ channel as a fallback. The same syscall probe is run at startup, and
 short-circuits the entire flow when the module is already resident for the
 current boot.
 
+### 6.4 Staging teardown
+
+The exploit stages its temporary su at `/apex/com.android.virt/bin/su`, on a
+tmpfs it mounts over that apex bin directory
+(`exploit/src/preload.c:ensure_su_mount`), and installs it into *adbd's* mount
+namespace so `adb shell` sees it. That directory precedes `/system/bin` in the
+shell `PATH`, which is the point: while the exploit drives the flow, a bare `su`
+resolves to the temporary one.
+
+After late-load that shadow is actively wrong. The temp-su daemon is gone (§6.2)
+but the client binary and the mount are not, so a plain `adb shell su` execs an
+orphaned client whose daemon no longer exists and fails with `su: connect
+daemon: Permission denied` — indistinguishable, from the operator's side, from
+root having failed, even though the driver is live and the manager has root. The
+tmpfs additionally hides the apex's own binaries (`crosvm`, `virtmgr`, `vm`,
+`fd_server`, …), leaving AVF broken for the rest of the boot.
+
+Teardown therefore runs once verification (§6.3) reports a live driver: unmount
+`/apex/com.android.virt/bin` until the directory is clear (repeated runs stack
+mounts on it), then unlink the temp-su client, socket and log. The unmount
+cannot use the exploit's su — that daemon is dead — so it goes through
+KernelSU's own `/system/bin/su`; `adb shell` inherits adbd's mount namespace,
+which is the namespace holding the mount. Teardown is best-effort: a failure
+costs a stale `su` in `PATH`, not root, so it warns with the manual command
+rather than failing the run. The shadow is a tmpfs, so a reboot also clears it.
+
 ---
 
 ## 7. Failure modes and detection
@@ -348,6 +374,7 @@ a log marker, a syscall probe result, or device liveness — never inferred.
 | Signature-mismatched manager | after late-load | driver resident but manager-authorization bit never set; manager cannot grant root | surfaced as a resident-but-unauthorized driver; operator must install the matching manager |
 | `init_module` load failure | late-load (§6.1) | KMI/vermagic or symbol-CRC mismatch rejects the `.ko`; driver never becomes resident | `ksud debug version` stays empty/zero; report load failure |
 | Driver not resident post-load | verification (§6.3) | `ksud debug version` returns empty or zero (both new reboot-magic and legacy `prctl` paths) | report late-load failure; root not established this boot |
+| Stale temp-su PATH shadow | teardown (§6.4) | `/apex/com.android.virt/bin` still mounted after the unmount loop; `command -v su` still resolves there | warn with the manual `umount` command; root is unaffected, so the run still succeeds |
 | Already rooted this boot | startup | `ksud debug version` returns non-zero at start | short-circuit; skip exploit and late-load |
 
 The design goal is that no failure other than the isolated §2.3 slide can leave

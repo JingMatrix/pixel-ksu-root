@@ -79,3 +79,71 @@ install_ksu() {
   done
   return 1
 }
+
+# --------------------------------------------------------------- teardown -----
+# The exploit stages its temporary su at $SU_SHADOW_DIR/su, on a tmpfs it mounts
+# over that apex bin dir (exploit/src/preload.c:ensure_su_mount), and it does so
+# inside *adbd's* mount namespace so `adb shell` sees it. That directory precedes
+# /system/bin in the shell PATH, so the temp su shadows every other `su` for the
+# rest of the boot — deliberate while the exploit is driving, wrong afterwards:
+# late-load tears the temp-su daemon down (docs/DESIGN.md §6.2) but leaves the
+# binary and the mount behind. A plain `adb shell su` then execs an orphaned
+# client whose daemon is gone and fails with "connect daemon: Permission denied",
+# which reads as "root is broken" even though the driver is live and the manager
+# has root. The tmpfs also hides the apex's real binaries (crosvm, virtmgr, vm,
+# fd_server, ...), leaving AVF/Terminal broken until the mount is dropped.
+#
+# Requires globals: DEV_SU DEV_KSU_SU DEV_TMP SU_SHADOW_DIR.
+
+# True while something is mounted over the apex bin dir. adb shell inherits
+# adbd's mount namespace — the namespace holding the mount — so /proc/self is
+# the correct view, and reading it needs no root.
+su_shadow_mounted() {
+  ash "grep -q ' $SU_SHADOW_DIR ' /proc/self/mountinfo" >/dev/null 2>&1
+}
+
+# Drop the staging mount and the dead temp-su leftovers. Best-effort: a failure
+# here costs the user a stale `su` in PATH, not root, so it never fails the run.
+teardown_staging() {
+  step "Teardown exploit staging (drop the $SU_SHADOW_DIR PATH shadow)"
+
+  if ! su_shadow_mounted; then
+    ok "no $SU_SHADOW_DIR shadow present"
+  else
+    # The temp-su daemon died with late-load, so its su cannot serve this
+    # umount: it has to go through KernelSU's own su. A repeated run can stack
+    # mounts on the same dir, so unmount until the dir is clear.
+    local i
+    for i in $(seq 1 5); do
+      ash "$DEV_KSU_SU -c 'umount $SU_SHADOW_DIR'" 2>&1 | strip | tee_log
+      su_shadow_mounted || break
+    done
+
+    if su_shadow_mounted; then
+      warn "could not unmount $SU_SHADOW_DIR — 'adb shell su' will keep reaching the"
+      warn "orphaned temp su ('connect daemon: Permission denied') and the apex's own"
+      warn "binaries stay hidden. Clear it manually with:"
+      warn "  adb shell $DEV_KSU_SU -c 'umount $SU_SHADOW_DIR'"
+      warn "A reboot also clears it — the shadow is a tmpfs, not a persistent change."
+    else
+      ok "$SU_SHADOW_DIR shadow removed"
+    fi
+  fi
+
+  # Dead weight once the daemon is gone: the local temp-su client, its socket
+  # and its log (paths fixed in exploit/src/preload.c). The exploit created them
+  # as root, so a plain shell cannot unlink them all — go through su first, then
+  # let the shell clear whatever it owns if su was unavailable.
+  local leftovers="$DEV_SU $DEV_TMP/temp_su.sock $DEV_TMP/su_daemon.log"
+  ash "$DEV_KSU_SU -c 'rm -f $leftovers'" >/dev/null 2>&1
+  ash "rm -f $leftovers" >/dev/null 2>&1
+
+  # Report the su a plain adb shell now resolves — this is how a user tests
+  # root, so it is the check worth printing.
+  local resolved
+  resolved=$(ash 'command -v su 2>/dev/null' | strip | tr -d '\r')
+  log "adb shell resolves su -> ${resolved:-<none>}"
+  [ "$resolved" = "$SU_SHADOW_DIR/su" ] \
+    && warn "'su' in adb shell still resolves to the exploit's temp su, not KernelSU's"
+  return 0
+}

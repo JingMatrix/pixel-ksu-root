@@ -6,8 +6,9 @@
 # manager. Manager-agnostic: works with any KernelSU variant.
 #
 # Flow: preflight -> resolve target -> derive ksud from manager -> obtain root
-#       -> late-load -> verify -> report. Everything is driven over `adb shell`
-#       from the host for deterministic control flow and full logs.
+#       -> late-load -> verify -> teardown staging -> report. Everything is
+#       driven over `adb shell` from the host for deterministic control flow
+#       and full logs.
 #
 # Environment / flags:
 #   SERIAL       adb serial for a specific device            (--serial)
@@ -46,7 +47,9 @@ while [ $# -gt 0 ]; do
     --serial)  SERIAL="$2"; shift 2 ;;
     --manager) MANAGER_PKG="$2"; shift 2 ;;
     --kmi)     KMI="$2"; shift 2 ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    # Print the header block: from line 2 until the first non-comment line, so
+    # it stays correct as the header grows.
+    -h|--help) sed -n '2,${/^#/!q;p;}' "$0"; exit 0 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 64 ;;
   esac
 done
@@ -60,6 +63,13 @@ DEV_KSUD="$DEV_TMP/ksud-manager"
 DEV_SU="$DEV_TMP/su"                  # lib/adb.sh (asu)
 # shellcheck disable=SC2034
 DEV_LOG="$DEV_TMP/exploit.log"        # lib/exploit.sh
+# KernelSU's own su, used for teardown: the temp-su daemon is dead by then.
+# shellcheck disable=SC2034
+DEV_KSU_SU=/system/bin/su             # lib/install.sh (teardown_staging)
+# apex bin dir the exploit mounts a tmpfs over to stage its temp su; it precedes
+# /system/bin in the shell PATH, which is why it must be unmounted afterwards.
+# shellcheck disable=SC2034
+SU_SHADOW_DIR=/apex/com.android.virt/bin   # lib/install.sh (teardown_staging)
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -113,6 +123,8 @@ derive_ksud || exit 1
 if ksu_loaded "$DEV_KSUD"; then
   step "KernelSU already loaded"
   ash "$DEV_KSUD debug info" 2>&1 | strip | tee_log
+  # An earlier run in this same boot may have left its staging mount behind.
+  teardown_staging
   ok "SUCCESS — KernelSU already resident (version=$(ksu_version "$DEV_KSUD")). Log: $RUNLOG"
   exit 0
 fi
@@ -134,6 +146,9 @@ ok "ROOT: $(asu id | strip)"
 
 # =============================================================== install ======
 if install_ksu; then
+  # Root is live; drop the exploit's PATH shadow so `adb shell su` reaches
+  # KernelSU's su instead of the temp su whose daemon late-load just killed.
+  teardown_staging
   step "Kernel evidence (driver self-report, no root needed)"
   ash "$DEV_KSUD debug info" 2>&1 | strip | tee_log
   ok "SUCCESS — KernelSU is loaded and answering (version=${KSU_VER:-?}). Full log: $RUNLOG"
