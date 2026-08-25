@@ -1,0 +1,31 @@
+{
+  "comment": "Kernel-offset-driven exploit selection. One payload per unique offset group; many Pixel devices share a group.",
+  "devices": [
+    {"codename": "akita", "build": "CP2A.260805.005", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-akita"},
+    {"codename": "blazer", "build": "CP2A.260705.006", "kernel": "6.6.118-android15", "kmi": "android15-6.6", "payload": "android15-6.6"},
+    {"codename": "bluejay", "build": "CP1A.260405.005", "kernel": "6.1.145-android14-11-gfa1d6308d1fe-ab14691759", "kmi": "android14-6.1", "payload": "android14-6.1-cp1a"},
+    {"codename": "bluejay", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
+    {"codename": "caiman", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
+    {"codename": "cheetah", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
+    {"codename": "comet", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
+    {"codename": "frankel", "build": "CP2A.260705.006", "kernel": "6.6.118-android15", "kmi": "android15-6.6", "payload": "android15-6.6"},
+    {"codename": "husky", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
+    {"codename": "komodo", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-b"},
+    {"codename": "lynx", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
+    {"codename": "mustang", "build": "CP2A.260705.006", "kernel": "6.6.118-android15", "kmi": "android15-6.6", "payload": "android15-6.6"},
+    {"codename": "oriole", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
+    {"codename": "panther", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
+    {"codename": "rango", "build": "CP2A.260705.006", "kernel": "6.6.118-android15", "kmi": "android15-6.6", "payload": "android15-6.6"},
+    {"codename": "raven", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
+    {"codename": "shiba", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
+    {"codename": "tegu", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-b"},
+    {"codename": "tokay", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-b"}
+  ],
+  "payloads": {
+    "android14-6.1-akita": {"kmi": "android14-6.1", "build_from": "akita-CP2A.260805.005", "file": "android14-6.1-akita.so"},
+    "android14-6.1-a": {"kmi": "android14-6.1", "build_from": "bluejay-CP2A.260705.006", "file": "android14-6.1-a.so"},
+    "android14-6.1-b": {"kmi": "android14-6.1", "build_from": "komodo-CP2A.260705.006", "file": "android14-6.1-b.so"},
+    "android15-6.6": {"kmi": "android15-6.6", "build_from": "blazer-CP2A.260705.006", "file": "android15-6.6.so"},
+    "android14-6.1-cp1a": {"kmi": "android14-6.1", "build_from": "bluejay-CP1A.260405.005", "file": "android14-6.1-cp1a.so"}
+  }
+}

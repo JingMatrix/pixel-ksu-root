@@ -1,0 +1,15 @@
+# Built exploit payloads and helper
+artifacts/exploits/*.so
+artifacts/cve-helper
+artifacts/*
+
+# Exploit build tree
+exploit/build/
+
+# Run artifacts and logs
+logs/
+*.log
+
+# Keep the exploit source and target table tracked
+!exploit/
+!data/targets.json

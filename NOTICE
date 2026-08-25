@@ -1,0 +1,50 @@
+pixel-ksu-root
+==============
+
+This project obtains temporary kernel read/write on a stock, locked-bootloader
+Google Pixel via a userspace kernel exploit, then late-loads a KernelSU loadable
+kernel module and hands control to the installed KernelSU manager. It works with
+general KernelSU variants and is manager-agnostic.
+
+It incorporates third-party work as noted below.
+
+
+Vendored exploit (./exploit)
+----------------------------
+
+The exploit source under ./exploit implements CVE-2026-43499 ("GhostLock"), a
+futex/rtmutex priority-inheritance stack use-after-free in kernel/locking/rtmutex.c.
+
+Exploit and technique:
+  NebuSec (Nebula Security), "IonStack Part II — GhostLock", in the CyberMeowfia
+  repository. Licensed under the Apache License, Version 2.0. Discovery credited
+  to NebuSec's VEGA tooling; disclosed 2026-07-07.
+  https://github.com/NebuSec/CyberMeowfia
+  https://nebusec.ai/research/ionstack-part-2/
+  https://nebusec.ai/buglist/CVE-2026-43499/
+
+Pixel/aarch64 adaptation:
+  The vendored tree under ./exploit adds android14-6.1 and android15-6.6 target
+  offsets and a KernelSU late-load daemon on top of the NebuSec exploit. It
+  carries no separate in-tree LICENSE file and inherits the NebuSec Apache-2.0
+  terms above.
+
+The vendored exploit retains its upstream Apache-2.0 license. A copy of the
+Apache License, Version 2.0, is available at:
+  https://www.apache.org/licenses/LICENSE-2.0
+
+KASLR heap-pointer side channel:
+  KernelSnitch — Lukas Maar et al., TU Graz (isec-tugraz), NDSS 2025.
+  https://github.com/isec-tugraz/KernelSnitch
+  https://lukasmaar.github.io/papers/ndss25-kernelsnitch.pdf
+
+
+KernelSU LKM / ksud mechanism
+-----------------------------
+
+The late-load path builds on the KernelSU project's loadable-kernel-module and
+ksud "late-load" mechanism: runtime symbol relocation against /proc/kallsyms,
+the init_module(2) load, and in-kernel APK-signature manager authorization.
+This project loads a prebuilt kernelsu.ko and drives ksud; it ships no KernelSU
+source and does not modify the driver.
+  KernelSU: https://github.com/tiann/KernelSU

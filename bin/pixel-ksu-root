@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+#
+# pixel-ksu-root — obtain temporary kernel R/W on a stock, locked-bootloader
+# Google Pixel via a userspace kernel exploit, then late-load a KernelSU
+# loadable kernel module (LKM) and hand control to the installed KernelSU
+# manager. Manager-agnostic: works with any KernelSU variant.
+#
+# Flow: preflight -> resolve target -> derive ksud from manager -> obtain root
+#       -> late-load -> verify -> report. Everything is driven over `adb shell`
+#       from the host for deterministic control flow and full logs.
+#
+# Environment / flags:
+#   SERIAL       adb serial for a specific device            (--serial)
+#   MANAGER_PKG  installed KernelSU manager package          (--manager)
+#                required unless auto-detected (see lib/install.sh:detect_manager)
+#   KMI          override the resolved kernel module interface (--kmi)
+#   CLIENT_UID   uid granted root by the exploit (default 2000, the adb shell)
+#   APP_UID      manager app uid the daemon authorizes (default: manager's uid)
+#   PHASE_A_MAX  slide-derive attempts per cycle    (default 40)
+#   PHASE_B_MAX  safe replay attempts per base      (default 40)
+#   ROOT_CYCLES  derive/replay cycles               (default 10)
+#   VERIFY_TRIES driver version polls after load    (default 30)
+set -u
+
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+LIB="$HERE/lib"
+ART="$HERE/artifacts"
+LOGDIR="$HERE/logs"
+# Consumed by a sourced lib (shellcheck cannot follow `.` sources).
+# shellcheck disable=SC2034
+MANIFEST="$HERE/data/targets.json"   # lib/select.sh
+
+# --------------------------------------------------------------- config -------
+SERIAL="${SERIAL:-}"
+MANAGER_PKG="${MANAGER_PKG:-}"
+KMI="${KMI:-}"                       # empty => resolved from the running kernel
+CLIENT_UID="${CLIENT_UID:-2000}"     # adb shell uid; the exploit grants it root
+APP_UID="${APP_UID:-}"               # empty => derived from the manager package
+PHASE_A_MAX="${PHASE_A_MAX:-40}"
+PHASE_B_MAX="${PHASE_B_MAX:-40}"
+ROOT_CYCLES="${ROOT_CYCLES:-10}"
+VERIFY_TRIES="${VERIFY_TRIES:-30}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --serial)  SERIAL="$2"; shift 2 ;;
+    --manager) MANAGER_PKG="$2"; shift 2 ;;
+    --kmi)     KMI="$2"; shift 2 ;;
+    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    *) printf 'unknown argument: %s\n' "$1" >&2; exit 64 ;;
+  esac
+done
+
+# device-side paths (DEV_SU / DEV_LOG are consumed by sourced libs)
+DEV_TMP=/data/local/tmp
+DEV_HELPER="$DEV_TMP/cve-helper"
+DEV_PAYLOAD="$DEV_TMP/exploit-payload.so"
+DEV_KSUD="$DEV_TMP/ksud-manager"
+# shellcheck disable=SC2034
+DEV_SU="$DEV_TMP/su"                  # lib/adb.sh (asu)
+# shellcheck disable=SC2034
+DEV_LOG="$DEV_TMP/exploit.log"        # lib/exploit.sh
+
+WORKDIR="$(mktemp -d)"
+trap 'rm -rf "$WORKDIR"' EXIT
+
+mkdir -p "$LOGDIR"
+RUNLOG="$LOGDIR/run-$(date +%Y%m%d-%H%M%S).log"
+
+# shellcheck source=lib/log.sh
+. "$LIB/log.sh"
+# shellcheck source=lib/adb.sh
+. "$LIB/adb.sh"
+# shellcheck source=lib/select.sh
+. "$LIB/select.sh"
+# shellcheck source=lib/exploit.sh
+. "$LIB/exploit.sh"
+# shellcheck source=lib/install.sh
+. "$LIB/install.sh"
+
+# =============================================================== preflight ====
+step "Preflight"
+wait_boot || { err "device not ready"; exit 1; }
+
+if [ -z "$MANAGER_PKG" ]; then
+  log "no MANAGER_PKG set — scanning installed packages for a KernelSU manager"
+  MANAGER_PKG="$(detect_manager || true)"
+  [ -n "$MANAGER_PKG" ] || { err "no KernelSU manager found — set MANAGER_PKG"; exit 1; }
+  ok "auto-detected manager: $MANAGER_PKG"
+fi
+
+# The exploit daemon authorizes one app uid; default it to the manager's uid.
+if [ -z "$APP_UID" ]; then
+  APP_UID="$(manager_uid "$MANAGER_PKG")"
+  [ -n "$APP_UID" ] || { err "manager $MANAGER_PKG not installed"; exit 1; }
+fi
+
+# =============================================================== resolve =======
+step "Resolve target"
+resolve_target; rc=$?
+if [ $rc -eq 1 ]; then err "target resolution failed"; exit 1; fi
+log "device=$TARGET_CODENAME build=$BUILD kernel=$KREL kmi=$KMI manager=$MANAGER_PKG uid=$APP_UID"
+if [ $rc -eq 2 ]; then
+  warn "no known payload for this device — exploit cannot run (kernel resolves kmi=$KMI only)"
+fi
+
+# =============================================================== derive ksud ===
+# ksud must come from the installed manager (the ko is signature-locked to it).
+step "Derive ksud from installed manager ($MANAGER_PKG)"
+derive_ksud || exit 1
+
+# A resident module needs no further work — probe with a plain-shell syscall.
+if ksu_loaded "$DEV_KSUD"; then
+  step "KernelSU already loaded"
+  ash "$DEV_KSUD debug info" 2>&1 | strip | tee_log
+  ok "SUCCESS — KernelSU already resident (version=$(ksu_version "$DEV_KSUD")). Log: $RUNLOG"
+  exit 0
+fi
+
+# =============================================================== obtain root ===
+if [ $rc -eq 2 ]; then err "cannot obtain root without a payload"; exit 2; fi
+
+step "Push exploit artifacts"
+apush "$ART/cve-helper" "$DEV_HELPER"
+apush "$EXPLOIT_PATH"   "$DEV_PAYLOAD"
+ash "chmod 755 $DEV_HELPER $DEV_PAYLOAD" 2>/dev/null
+
+if have_root; then
+  ok "already rooted — skipping exploit"
+else
+  obtain_root || { err "failed to obtain root"; exit 2; }
+fi
+ok "ROOT: $(asu id | strip)"
+
+# =============================================================== install ======
+if install_ksu; then
+  step "Kernel evidence (driver self-report, no root needed)"
+  ash "$DEV_KSUD debug info" 2>&1 | strip | tee_log
+  ok "SUCCESS — KernelSU is loaded and answering (version=${KSU_VER:-?}). Full log: $RUNLOG"
+  exit 0
+else
+  err "late-load ran but driver did not answer. Full log: $RUNLOG"
+  exit 3
+fi
