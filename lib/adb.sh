@@ -14,7 +14,19 @@ asu()   { ash "$DEV_SU -c \"$*\""; }                 # run a command as root via
 apush() { "${ADB[@]}" push "$1" "$2" 2>&1 | tail -1 | tee_log; }
 alive() { "${ADB[@]}" get-state >/dev/null 2>&1; }
 
-boot_id() { ash 'cat /proc/sys/kernel/random/boot_id 2>/dev/null' | tr -d '\r'; }
+# Boot identity, for deciding whether a derived KASLR base is still valid.
+#
+# NOT /proc/sys/kernel/random/boot_id: the Phase A KASLR oracle repoints that
+# sysctl's .data at a known kernel address and reads the leaked pointer back out
+# of the procfs file (exploit/src/fops.c:restore_slide_boot_id). Sampled while
+# redirected — or before the restore lands — it returns attacker-pointed memory,
+# not a boot id, so a *correct* base gets discarded and Phase A runs again for
+# nothing. Measured on panther 2026-08-31: boot_id read ee78cef3 -> d029a1c5 ->
+# ee78cef3 across one uninterrupted 2-day uptime.
+#
+# btime is the boot wall-clock second from /proc/stat. Nothing in the exploit
+# touches it, and it changes only on a real boot.
+boot_epoch() { ash 'grep -m1 btime /proc/stat' | tr -d '\r' | awk '{print $2}'; }
 getprop() { ash "getprop $1" | tr -d '\r'; }
 
 # Wait for the device to reappear and finish booting.
