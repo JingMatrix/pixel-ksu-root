@@ -22,7 +22,7 @@ The exploit chain, the KASLR oracle, and the KernelSnitch side channel originate
 
 Exactly one stage of the chain can panic the kernel: the KASLR slide derivation, which races a page it hopes it has reclaimed. Every other stage is retry-safe, and the kernel-text base is fixed for the lifetime of a single boot. The host flow splits on this property:
 
-- **Phase A — derive the base (risky, once per boot).** The payload runs with no `KASLR_BASE` in its environment. The forged-waiter write repoints the `random_table` sysctl `ctl_table.data` at a known kernel-text pointer; reading `/proc/sys/kernel/random/boot_id` leaks it through `proc_do_uuid()`, and subtracting the image offset yields `_stext`/the KASLR base. `restore_slide_boot_id()` repairs the corrupted `ctl_table.data`. Because a lost race reboots the device, a wait-for-boot precedes every attempt and a liveness check classifies a disappearance as a panic. On success the device log emits `slide-kaslr-ok pid=<pid> base=<hex>`, and the base is pinned to the current boot.
+- **Phase A — derive the base (risky, once per boot).** The payload runs with no `KASLR_BASE` in its environment. The forged-waiter write repoints the `random_table` sysctl `ctl_table.data` at a known kernel-text pointer; reading `/proc/sys/kernel/random/boot_id` leaks it through `proc_do_uuid()`, and subtracting the image offset yields `_stext`/the KASLR base. `restore_slide_boot_id()` repairs the corrupted `ctl_table.data`. Because this stage can panic the kernel, a wait-for-boot precedes every attempt and a liveness check classifies a disappearance as a panic. Winning the race is not a guarantee of survival: the panic can land *after* the leak has already been written to the device log, so a single shot can emit `slide-kaslr-ok` **and** reboot the phone. When that happens the liveness check sees the device already back and reports success, and it is the boot-id comparison below — not the liveness check — that catches the reboot and forces a re-derive. On success the device log emits `slide-kaslr-ok pid=<pid> base=<hex>`, and the base is pinned to the current boot.
 - **Phase B — replay against the base (safe, retry until root).** The payload re-runs with `KASLR_BASE=0x<base>` exported. This path never panics and is looped until `id` reports `uid=0` through the temporary su.
 - **Boot-id invalidation.** The captured base is valid only for the boot that produced it. Each Phase-B iteration compares the live `/proc/sys/kernel/random/boot_id` against the boot recorded at capture time; any change discards the base and returns to Phase A. An outer loop repeats derive→replay across reboots.
 
@@ -47,7 +47,20 @@ Late-load daemonizes and re-enforces SELinux in its forked child, which tears do
 
 ### (f) Staging teardown
 
-The exploit stages its temporary su at `/apex/com.android.virt/bin/su`, on a tmpfs mounted over that apex bin directory inside adbd's mount namespace, because that directory precedes `/system/bin` in the shell `PATH` — so a bare `su` in `adb shell` reaches the temporary one while the flow is running. Late-load then tears the temp-su daemon down (see (e)) without removing the shadow, which leaves a bare `adb shell su` running an orphaned client that fails with `su: connect daemon: Permission denied` even though root is working, and leaves the apex's real binaries (`crosvm`, `virtmgr`, `vm`, …) hidden. Once verification reports a live driver, the flow unmounts the staging tmpfs — through KernelSU's own `/system/bin/su`, since the exploit's daemon is already gone — removes the temp-su client, socket and log, and reports which `su` a plain `adb shell` now resolves. It is best-effort: on failure it warns with the manual `umount` command instead of failing the run, and a reboot clears the mount regardless.
+The exploit stages its temporary su at `/apex/com.android.virt/bin/su`, on a tmpfs mounted over that apex bin directory, because that directory precedes `/system/bin` in the shell `PATH` — so a bare `su` in `adb shell` reaches the temporary one while the flow is running. That tmpfs goes into the **global** mount namespace, the one `adb shell` shares with init (`/proc/self/ns/mnt` matches `/proc/1/ns/mnt`), not a private adbd namespace, so the shadow hides the directory system-wide for the rest of the boot. Late-load then tears the temp-su daemon down (see (e)) without removing the shadow, which leaves a bare `adb shell su` running an orphaned client that fails with `su: connect daemon: Permission denied` even though root is working, and leaves the apex's real binaries (`crosvm`, `virtmgr`, `vm`, …) hidden. Once verification reports a live driver, the flow tries to unmount the staging tmpfs through KernelSU's own `/system/bin/su`, removes the temp-su client, socket and log, and reports which `su` a plain `adb shell` now resolves. Two details make that unmount fail in practice, both observed on a real run:
+
+- **The shadow is stacked, not single.** Each derive→replay cycle mounts its own tmpfs on the same path, so `/proc/self/mountinfo` can hold several entries for `/apex/com.android.virt/bin` (nested, each the parent of the next). One `umount` pops only the topmost.
+- **A plain `umount` fails with `EBUSY`.** The temp-su usermode-helper (`su --umh <uid>`) can still be running with the staged binary as its `txt` image, which pins the filesystem — so the exploit's daemon is *not* reliably gone by teardown time. `umount -l` (lazy detach) succeeds where plain `umount` does not.
+
+Teardown is best-effort and warns instead of failing the run. The remedy that works is a lazy unmount, repeated once per stacked mount:
+
+```sh
+# repeat until the count below reads 0
+adb shell '/system/bin/su -c "umount -l /apex/com.android.virt/bin"'
+adb shell 'grep -c com.android.virt/bin /proc/self/mountinfo'
+```
+
+A reboot clears the mount too — but see [Root does not survive a reboot](#root-does-not-survive-a-reboot): rebooting also costs you root, so unmounting is the cheaper fix.
 
 ## Usage
 
@@ -66,6 +79,10 @@ bin/pixel-ksu-root
 ```
 
 The driver resolves the device against `data/targets.json`, runs the two-phase KASLR flow, late-loads the module through the manager-derived ksud, and verifies via the driver syscall. It exits non-zero if no payload resolves for the device, if no manager is installed, or if verification never reports a live driver.
+
+### Root does not survive a reboot
+
+The module is late-loaded into the **running** kernel. The bootloader stays locked and the boot image is never modified, so nothing loads `kernelsu.ko` on the next boot: root lasts for the current boot only, and `bin/pixel-ksu-root` has to be re-run after every reboot. This is inherent to the approach rather than a defect — it is the price of not touching the boot image — but it does mean "just reboot" is never a free fix for a problem left behind by a run.
 
 ### Environment variables
 
@@ -92,6 +109,7 @@ pixel-ksu-root/
 ├── scripts/
 │   └── build-payloads.sh       Builds and deduplicates the payload set
 ├── artifacts/
+│   ├── cve-helper              Device-side loader, pushed alongside the payload
 │   └── exploits/               Built, deduplicated payload .so files
 └── docs/                       Design and analysis notes
 ```
