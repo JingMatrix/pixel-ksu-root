@@ -13,3 +13,20 @@ logs/
 # Keep the exploit source and target table tracked
 !exploit/
 !data/targets.json
+
+# Live captures from a rooted device (scripts/harvest-live.sh). Large binaries
+# (BTF ~5.6MB, kallsyms ~10MB) and per-boot data; the derived offsets.report is
+# the part worth reading, and target.h is the committed artefact.
+data/live/*/kallsyms.txt
+data/live/*/btf-vmlinux
+data/live/*/config.gz
+data/live/*/*-ramoops-*
+data/live/*/Image
+data/live/*/dmesg.txt
+data/live/*/slabinfo.txt
+
+# Compiled detection-trigger and exploit binaries (their source is tracked)
+exploit/badepoll/trigger
+exploit/badepoll/trigger43074
+exploit/cve64560/trigger
+exploit/cve43074/build/
