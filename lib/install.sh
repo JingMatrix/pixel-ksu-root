@@ -19,20 +19,24 @@ manager_uid() {
 # lib/arm64-v8a/libksud.so. This pulls each candidate APK to inspect it host
 # side, so it is slow; set MANAGER_PKG to skip it. Prints the package name.
 detect_manager() {
-  local pkg apk
-  while read -r pkg; do
+  local pkg apk pkgs=()
+  # Read the whole list up front. `adb shell` keeps stdin attached, so calling
+  # ash inside a `while read ... done < <(...)` loop drains the package list on
+  # the first iteration and the scan silently stops after one package.
+  mapfile -t pkgs < <(ash "pm list packages -3 2>/dev/null" | tr -d '\r')
+  for pkg in "${pkgs[@]}"; do
     pkg=${pkg#package:}
     [ -n "$pkg" ] || continue
     apk=$(ash "pm path $pkg 2>/dev/null" | tr -d '\r' | sed -n 's/^package://p' | head -1)
     [ -n "$apk" ] || continue
-    "${ADB[@]}" pull "$apk" "$WORKDIR/probe.apk" >/dev/null 2>&1 || continue
+    "${ADB[@]}" pull "$apk" "$WORKDIR/probe.apk" >/dev/null 2>&1 </dev/null || continue
     if unzip -l "$WORKDIR/probe.apk" 'lib/arm64-v8a/libksud.so' >/dev/null 2>&1; then
       rm -f "$WORKDIR/probe.apk"
       printf '%s\n' "$pkg"
       return 0
     fi
     rm -f "$WORKDIR/probe.apk"
-  done < <(ash "pm list packages -3 2>/dev/null" | tr -d '\r')
+  done
   return 1
 }
 
