@@ -1,0 +1,27 @@
+# runner/recipes/ghostlock.toml — the DEFAULT recipe.
+#
+# `make TARGET=<t>` with no RECIPE= resolves to this file.
+#
+# Devices are added by adding a target header and a data/targets.json row.
+# The entry is named per KERNEL FLAVOUR, and
+# the flavour of a target comes from data/targets.json, which the host runner
+# already reads.
+
+schema      = 1
+name        = "ghostlock"
+description = "CVE-2026-43499 GhostLock: composed, hardware-verified, the only working root path."
+default     = true
+
+# Stages built for every kernel flavour alongside the entry.
+#
+# A bare key must precede the first [table] header, or it becomes a key of that
+# table; `stages` sits above [entry].
+stages = ["handoff.suhelper"]
+
+[entry]
+"android14-6.1" = "entry.ghostlock@6.1"
+"android15-6.6" = "entry.ghostlock@6.6"
+
+[goals]
+all     = ["entry", "handoff.suhelper"]
+release = ["entry:release"]

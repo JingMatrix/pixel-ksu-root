@@ -1,0 +1,41 @@
+# runner/recipes/cve64560.toml — CVE-2026-64560, standalone.
+#
+# Declares the 64560 entry as a stage built through the same manifest/recipe
+# path as GhostLock: one static binary with its own main().  The tree models an
+# exploit it cannot decompose as a FOREIGN CHAIN -- an opaque process behind a
+# declared {invoke, markers, exit-code map, provides} contract -- and
+# runner/stages/entry.cve64560@6.1/stage.toml carries that contract, so:
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=cve64560   # build it
+#     ./pixel-ksu-root --recipe cve64560                  # run it
+#
+# resolve the SAME entry from the SAME files.  One recipe name, one resolver;
+# build-time and run-time selection cannot drift.
+#
+# The entry does its own runtime fingerprint match and owns its groom, bridge, rw
+# and effect; it shares neither GhostLock's addressing nor its restore ledger,
+# and honours none of this recipe's tunables.  Driving it gives outcome
+# classification, budgets, settle and per-shot archives.  STAGE0 lands and the
+# bridge write lands; the bridge fd has never validated and CVE-2026-64560 has
+# never rooted a device.
+#
+# panther is the only target with a cve64560.h; any other target fails the
+# ARCH-G0-TARGETSET gate at build time, and at run time through the same gate.
+
+schema      = 1
+name        = "cve64560"
+description = "CVE-2026-64560 posix-cpu-timer entry: foreign chain (2.6) — buildable and runner-drivable, NOT composed, never rooted."
+default     = false
+
+# No non-entry stages: this entry is a self-contained standalone binary.  With no
+# stage providing CAP_SU the runner treats a `--recipe cve64560` run as a HUNT:
+# no manager is detected, no ksud is derived and nothing is late-loaded.
+stages = []
+
+[entry]
+"android14-6.1" = "entry.cve64560@6.1"
+
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

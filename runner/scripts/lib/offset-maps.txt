@@ -1,0 +1,178 @@
+# offset-maps.txt — the one table of how every committed target.h offset is
+# derived from a kernel build. Read by both paths, so they cannot drift:
+#
+#   runner/scripts/harvest-live.sh   live, from a rooted device
+#   tools/pixel-image/derive_offsets.py   offline, from a public boot.img
+#
+# Both feed runner/scripts/lib/offset_rules.py, which implements one resolver
+# per rule. A row is `MACRO <rule fields...>`; `#` comments and blank lines are
+# ignored. Sections are named by the env var offset_report.py reads.
+#
+# Anything expressible here belongs here. An addend or an anchor rule written
+# only in a header comment is a derivation nobody can re-run, which is how
+# SLIDE_TRACE_MARK_IP_OFF — the single constant every root run consumes —
+# went unchecked by offsets.report for 19 targets.
+
+
+[SYMMAP]
+# MACRO  symbol[|alt-symbol...]  addend
+#
+# Symbol addresses; they rot every build. Alternatives exist because the same
+# object is renamed across kernel versions (6.1 generic_file_splice_read ->
+# 6.6 copy_splice_read). The addend is link-time arithmetic on top of the
+# symbol, for macros that name a field or element rather than the symbol.
+ASHMEM_IOCTL_OFF ashmem_ioctl 0
+ASHMEM_MMAP_OFF ashmem_mmap 0
+ASHMEM_OPEN_OFF ashmem_open 0
+ASHMEM_RELEASE_OFF ashmem_release 0
+ASHMEM_SHOW_FDINFO_OFF ashmem_show_fdinfo 0
+ASHMEM_FOPS_OFF ashmem_fops 0
+# The configfs read/write entry points the forged fops calls through.
+# configfs converted these to iter ops in 5.13; before that the same
+# copy through the same configfs_buffer is reached by .read/.write under
+# different names. pread/pwrite drive both, so only the name and the fops
+# slot differ -- the slot is CONFIGFS_RW_SLOT_READ in the target header.
+# The macro keeps its 6.1/6.6 name so 19 committed headers stay valid.
+CONFIGFS_READ_ITER_OFF configfs_read_iter|configfs_read_bin_file 0
+CONFIGFS_BIN_WRITE_ITER_OFF configfs_bin_write_iter|configfs_write_bin_file 0
+COPY_SPLICE_READ_OFF copy_splice_read|generic_file_splice_read 0
+NOOP_LLSEEK_OFF noop_llseek 0
+INIT_TASK_OFF init_task 0
+ROOT_TASK_GROUP_OFF root_task_group 0
+SELINUX_ENFORCING_OFF selinux_state 0
+SELINUX_BLOB_SIZES_OFF selinux_blob_sizes 0
+SECURITY_HOOK_HEADS_OFF security_hook_heads 0
+KMALLOC_CACHES_OFF kmalloc_caches 0
+ANON_PIPE_BUF_OPS_OFF anon_pipe_buf_ops 0
+CALL_USERMODEHELPER_EXEC_WORK_OFF call_usermodehelper_exec_work 0
+SYSTEM_UNBOUND_WQ_OFF system_unbound_wq 0
+# Slide references. Until these rows existed, offsets.report checked none of
+# them; the arithmetic lived only in prose above each #define.
+SLIDE_NFULNL_LOGGER_OFF nfulnl_logger 0
+SLIDE_SYSCTL_BOOTID_OFF sysctl_bootid 0
+# loggers[0][NF_LOG_TYPE_ULOG=1] = loggers + 8, and holds &nfulnl_logger.
+SLIDE_LOGGERS_0_1_OFF loggers 8
+# random_table[4] is the boot_id ctl_table entry and +0x8 is its .data
+# pointer: 4 * sizeof(struct ctl_table) + 8 = 4 * 0x40 + 8 = 0x108. Verified
+# on android14-6.1 (panther) and android15-6.6 (blazer).
+SLIDE_RANDOM_BOOT_ID_DATA_OFF random_table 0x108
+
+
+[STRUCTMAP]
+# MACRO  struct.path[|struct.path...]
+#
+# The layout assumptions the exploit bakes in. KMI says they are stable across
+# a flavour; BTF measures them per build -- and the BTF is in the kernel image
+# itself, so this section needs no device either.
+#
+# Alternatives, as in SYMMAP, cover a field that was renamed or re-nested.
+# 6.6 folded rt_mutex_waiter's rb_node/prio/deadline into an rt_waiter_node,
+# so tree_entry became tree.entry and every field after it moved by 0x20. The
+# four 6.6 headers had carried the 6.1 values here since they were written;
+# nothing caught it because no 6.6 device has ever been harvested, and no code
+# reads these rows -- they are the record of the layout, and the record was
+# wrong.
+TASK_PID_OFF task_struct.pid
+TASK_TGID_OFF task_struct.tgid
+TASK_REAL_PARENT_OFF task_struct.real_parent
+TASK_REAL_CRED_OFF task_struct.real_cred
+TASK_CRED_OFF task_struct.cred
+TASK_COMM_OFF task_struct.comm
+TASK_TASKS_OFF task_struct.tasks
+TASK_SECCOMP_OFF task_struct.seccomp
+TASK_ATOMIC_FLAGS_OFF task_struct.atomic_flags
+FAKE_TASK_USAGE_OFF task_struct.usage
+FAKE_TASK_PRIO_OFF task_struct.prio
+FAKE_TASK_NORMAL_PRIO_OFF task_struct.normal_prio
+FAKE_TASK_TASK_GROUP_OFF task_struct.sched_task_group
+FAKE_TASK_PI_LOCK_OFF task_struct.pi_lock
+FAKE_TASK_PI_WAITERS_OFF task_struct.pi_waiters
+FAKE_TASK_PI_TOP_TASK_OFF task_struct.pi_top_task
+FAKE_TASK_PI_BLOCKED_ON_OFF task_struct.pi_blocked_on
+CRED_UID_OFF cred.uid
+CRED_SECUREBITS_OFF cred.securebits
+CRED_CAPS_OFF cred.cap_inheritable
+CRED_SECURITY_OFF cred.security
+MM_OWNER_OFF mm_struct.owner
+WAITER_TREE_ENTRY_OFF rt_mutex_waiter.tree_entry|rt_mutex_waiter.tree.entry
+WAITER_PI_TREE_ENTRY_OFF rt_mutex_waiter.pi_tree_entry|rt_mutex_waiter.pi_tree.entry
+WAITER_TASK_OFF rt_mutex_waiter.task
+WAITER_LOCK_OFF rt_mutex_waiter.lock
+WAITER_WAKE_STATE_OFF rt_mutex_waiter.wake_state
+WAITER_WW_CTX_OFF rt_mutex_waiter.ww_ctx
+FOPS_OWNER_OFF file_operations.owner
+FOPS_LLSEEK_OFF file_operations.llseek
+FOPS_READ_OFF file_operations.read
+FOPS_WRITE_OFF file_operations.write
+FOPS_READ_ITER_OFF file_operations.read_iter
+FOPS_WRITE_ITER_OFF file_operations.write_iter
+FOPS_IOCTL_OFF file_operations.unlocked_ioctl
+FOPS_COMPAT_IOCTL_OFF file_operations.compat_ioctl
+FOPS_MMAP_OFF file_operations.mmap
+FOPS_OPEN_OFF file_operations.open
+FOPS_RELEASE_OFF file_operations.release
+FOPS_SPLICE_READ_OFF file_operations.splice_read
+FOPS_SHOW_FDINFO_OFF file_operations.show_fdinfo
+STRUCT_PAGE_SIZE page
+STRUCT_PAGE_COMPOUND_HEAD_OFF page.compound_head
+WQ_DFL_PWQ_OFF workqueue_struct.dfl_pwq
+PWQ_WQ_OFF pool_workqueue.wq
+PWQ_WORK_COLOR_OFF pool_workqueue.work_color
+PWQ_REFCNT_OFF pool_workqueue.refcnt
+PWQ_NR_IN_FLIGHT_OFF pool_workqueue.nr_in_flight
+PWQ_NR_ACTIVE_OFF pool_workqueue.nr_active
+PWQ_MAX_ACTIVE_OFF pool_workqueue.max_active
+POOL_WORKLIST_OFF worker_pool.worklist
+POOL_NR_IDLE_OFF worker_pool.nr_idle
+WORK_DATA_OFF work_struct.data
+WORK_ENTRY_OFF work_struct.entry
+WORK_FUNC_OFF work_struct.func
+SECCOMP_MODE_OFF seccomp.mode
+SECCOMP_FILTER_OFF seccomp.filter
+
+
+[SLABMAP]
+# MACRO  cache-name  objsize|objperslab|pagesperslab
+#
+# sizeof(struct mm_struct) is 0x3c0 but the cache strides 0x400, and
+# KernelSnitch walks the stride — committing the BTF size breaks the mm_struct
+# leak (see the MM_STRUCT_SZ note in target.h).
+MM_STRUCT_SZ mm_struct objsize
+MM_ORDER_PAGES mm_struct pagesperslab
+
+
+[PTRMAP]
+# MACRO  deref    base-macro    byte-offset
+# MACRO  findptr  target-macro  back-offset
+#
+# Offsets no symbol table exposes. `ashmem_compat_ioctl` and `ashmem_misc` are
+# static, so kallsyms drops them — on a rooted device too — and BTF has no
+# data-symbol addresses; both are reachable by chasing a pointer through
+# ashmem_fops in the Image. `findptr` demands exactly one hit, so an ambiguous
+# match is an UNRESOLVED rather than a wrong answer.
+#
+# The byte-offset field may name another macro instead of a literal, and here
+# it must: file_operations.compat_ioctl is 0x58 on android14-6.1 and 0x50 on
+# android15-6.6, so the literal that used to sit here read the wrong slot on
+# every 6.6 target. No live capture had covered one, so nothing caught it.
+ASHMEM_COMPAT_IOCTL_OFF deref ASHMEM_FOPS_OFF FOPS_COMPAT_IOCTL_OFF
+ASHMEM_MISC_FOPS_OFF findptr ASHMEM_FOPS_OFF 0
+
+
+[CODEMAP]
+# MACRO  cbz-to-warn  symbol  span     -> offset WITHIN symbol
+# MACRO  self-addr    symbol  0        -> offset within the IMAGE
+#
+# Offsets that only the instruction stream carries. The two rules report
+# different things because the two macros hold different things: a kprobe
+# oracle is placed relative to its function, while SLIDE_TRACE_MARK_IP_OFF is
+# an image offset the payload subtracts from a leaked pointer.
+#
+# self-addr finds the adrp/add pair inside <symbol> whose computed address
+# lands back inside <symbol> — how the compiler materialises _THIS_IP_. That
+# is the value tracing_mark_write stores into print_entry.ip, which is the
+# whole KASLR leak (cves/kaslr/README.md). It is not KMI-stable — 0x164 on
+# android14-6.1, 0x15c on android15-6.6 — which is exactly why it has to be a
+# rule and cannot be a SYMMAP addend.
+POSIX_CPU_TIMER_DEL_RACE_OFF cbz-to-warn posix_cpu_timer_del 4
+SLIDE_TRACE_MARK_IP_OFF self-addr tracing_mark_write 0

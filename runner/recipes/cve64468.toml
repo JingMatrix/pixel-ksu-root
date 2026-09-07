@@ -1,0 +1,13 @@
+schema      = 1
+name        = "cve64468"
+description = "CVE-2026-64468 binder_free_transaction UAF: foreign chain, detection hunt. Needs root (a prior baseline root on the same boot) to create its private binder device; provides nothing and never roots."
+default     = false
+
+stages = []
+
+[entry]
+"android14-6.1" = "entry.cve64468@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]
