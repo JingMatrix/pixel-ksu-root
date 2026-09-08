@@ -7,7 +7,7 @@ target's kernel flavour.
 It is also the RUN-time selector.  `--format shell` emits the same recipe's
 ENTRY stage as a runner contract -- the "foreign chain", an opaque process
 behind a declared {invoke, markers, exit-code map, provides} contract -- so
-`runner/bin/pixel-ksu-root --recipe X` and `make RECIPE=X` resolve the identical
+`./pixel-ksu-root --recipe X` and `make RECIPE=X` resolve the identical
 stage from the identical files and cannot drift.
 
 Usage:
@@ -76,7 +76,7 @@ STAGE_KEYS = {"schema", "kind", "id", "cve", "kmi", "composed", "status",
 # declares none inherits the runner's default, a single reboot step.
 SETUP_KEYS = {"reboot", "command", "needs_root", "once_per_boot", "description"}
 INVOKE_KEYS = {"kind", "artifact_source", "artifact", "dest", "mode", "command",
-               "accepts_base"}
+               "accepts_base", "needs_root"}
 MARKER_KEYS = {"pass", "gate_fail", "restore_pass", "restore_bad", "heartbeat",
                "diag", "diag_count"}
 PROVIDES_KEYS = {"caps", "field", "label"}
@@ -94,14 +94,28 @@ INVOKE_FORMS = {
 }
 PLACEHOLDER_RE = re.compile(r"@([A-Z_]+)@")
 
-# The outcome vocabulary classify_shot() in runner/lib/exploit.sh uses.  An
-# exit_map may only name one of these.
+# The classify_shot() outcomes (runner/lib/exploit.sh) an exit_map may name.
+# HELD is deliberately absent: a stage announces it with a marker, never with an
+# exit status -- a held hook means the process is still running.
 OUTCOMES = {"PASS", "MISS", "PANIC", "REFUSED", "DIRTY", "PARKED",
             "PRECONDITION_FAIL"}
 BUILD_KEYS = {"form", "entry", "sources", "includes", "depends", "defines",
               "cflags", "opt", "ldflags", "output", "uses_target_header"}
 RECIPE_KEYS = {"schema", "name", "description", "default", "stages", "entry",
                "goals"}
+
+
+def _prop_list(stage, key, sep):
+    """Render a [properties] list for the contract printout.
+
+    Distinguishes "not declared" from "declared empty": exploit.sh substitutes a
+    GhostLock-shaped default for an empty string, which would misreport a stage
+    that genuinely owes no repairs.
+    """
+    props = stage.get("properties", {})
+    if key not in props:
+        return "(undeclared)"
+    return sep.join(props[key]) or "(none)"
 
 
 def die(gate, msg, hint=None):
@@ -249,6 +263,7 @@ def contract_of(sid, st, target, stages, entry_build):
             "%r may use: %s" % (kind, ", ".join("@%s@" % p for p in sorted(allowed))))
 
     accepts_base = bool(inv.get("accepts_base", False))
+    needs_root = bool(inv.get("needs_root", False))
     if accepts_base and "KASLR_ENV" not in used:
         die("ARCH-G0-INVOKE",
             "stage %r sets accepts_base = true but its command never uses "
@@ -335,6 +350,7 @@ def contract_of(sid, st, target, stages, entry_build):
 
     return {
         "kind": kind, "command": cmd, "accepts_base": accepts_base,
+        "needs_root": needs_root,
         "artifact_source": src, "artifact": artifact, "dest": dest,
         "mode": str(inv.get("mode", "755")),
         "markers": mk, "exit_map": " ".join(pairs),
@@ -639,6 +655,7 @@ def main():
             ("RUN_INVOKE_KIND", c["kind"]),
             ("RUN_INVOKE_CMD", c["command"]),
             ("RUN_INVOKE_ACCEPTS_BASE", "1" if c["accepts_base"] else "0"),
+            ("RUN_INVOKE_NEEDS_ROOT", "1" if c["needs_root"] else "0"),
             ("RUN_INVOKE_SOURCE", c["artifact_source"]),
             ("RUN_INVOKE_ARTIFACT", c["artifact"]),
             ("RUN_INVOKE_DEST", c["dest"]),
@@ -664,10 +681,15 @@ def main():
             ("RUN_PROP_PANIC_POST",
              stages[entry_id].get("properties", {})
              .get("panic_risk", {}).get("post_slide", "unknown")),
-            ("RUN_PROP_RESTORES",
-             " ".join(stages[entry_id].get("properties", {}).get("restores", []))),
-            ("RUN_PROP_DESTRUCTIVE",
-             "; ".join(stages[entry_id].get("properties", {}).get("destructive", []))),
+            # A stage that declares NOTHING destructive must not be reported
+            # with the built-in GhostLock defaults exploit.sh falls back to on
+            # an empty value, so say which of the two silences this is: the key
+            # absent (nobody has decided) or the key present and empty (decided,
+            # and the answer is none). Both are non-empty strings, so the shell's
+            # `:-` default only fires on the no-manifest path, where the built-in
+            # GhostLock text is the right answer.
+            ("RUN_PROP_RESTORES", _prop_list(stages[entry_id], "restores", " ")),
+            ("RUN_PROP_DESTRUCTIVE", _prop_list(stages[entry_id], "destructive", "; ")),
         ]
         # Setup steps: an ordered list the runner runs before each shot. Emitted
         # as a count plus five vars per step, so load_entry_contract() can read

@@ -22,7 +22,7 @@ sources = ["cves/cve-2026-64468/racing64468.c"]
 includes = []                   # self-contained: libc + linux/android/binder.h only
 depends  = []
 defines  = []
-cflags   = ["-std=gnu17", "@OPT@", "-static", "-Werror"]
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror"]
 opt      = ["-O2", "-g0"]
 ldflags  = []
 output   = "cve-2026-64468-racing"
@@ -37,12 +37,24 @@ mode = "755"
 # shot while the runner's own loop supplies the retries. Its whole marker stream
 # is stdout, so the redirect is what puts it in $DEV_LOG for archive_shot.
 #
+# --pump runs a background kmalloc-1k churn (PUMP_THREADS) so that whenever the
+# read->use window opens, OUR crafted object is already the occupant of the freed
+# slot rather than a foreign allocation. It is the one lever observed to turn a
+# window landing into a detectable WIN sooner. (It favours our benign object over
+# a foreign one, so it raises the WIN rate and lowers the panic rate -- the right
+# trade for the hunt; drop it when the goal is to provoke a panic to debug.)
+#
 # It opens /dev/binderfs/ksu64468, created by the [[setup]] step below. Absent
-# it, racing64468 exits 1 on the open and the shot is REFUSED.
-command = "cd @DEV_TMP@; @DEV_ENTRY@ 200 > @DEV_LOG@ 2>&1"
+# it, racing64468 exits 3 (die) and the shot is REFUSED. The racer runs
+# as root (needs_root below) so it can open the device.
+command = "cd @DEV_TMP@; @DEV_ENTRY@ --pump 200 > @DEV_LOG@ 2>&1"
 # No KASLR base is involved: this is a reclaim-detection hunt, not an addressed
 # write, so nothing is replayed into it.
 accepts_base = false
+# The racer runs as root. binderfs labels its device by genfscon and the shell
+# domain cannot open a privately-named one, so this detection harness opens it as
+# root -- the same way its own README drives it (su -c racing64468).
+needs_root = true
 
 [markers]
 # The win: racing64468.c:225 prints this when the +108 decrement lands in one of
@@ -65,9 +77,13 @@ diag_count = 'attempts_built=[0-9]+'
 # A completed run is a MISS unless the pass marker fired; a die() is a refusal,
 # almost always the missing private device, which settle-and-retry cannot fix but
 # whose archived log names the cause so REFUSED_MAX ends the run with it in view.
+# 0  a win printed the pass marker (marker-classified PASS); a clean no-win
+#    completion also returns 0 only when it won, so 0 without the marker is a MISS
+# 1  ran to completion, no win  -> MISS (a real attempt, not a refusal)
+# 3  die(): the private binder device could not be opened/created -> REFUSED
 [exit_map]
-"0" = "MISS"
-"1" = "REFUSED"
+"1" = "MISS"
+"3" = "REFUSED"
 
 # This stage reaches a research milestone (a detected UAF write), not a
 # capability the chain can hand on. It provides nothing; there is no CAP_SU

@@ -8,6 +8,7 @@ cves/
   cve-2026-43499-ghostlock/   CVE-2026-43499 — GhostLock
   cve-2026-64560/             CVE-2026-64560 — posix-cpu-timer UAF
   cve-2026-64468/             CVE-2026-64468 — binder process-lifetime UAF
+  cve-2026-46242-badepoll/    CVE-2026-46242 — Bad Epoll close-vs-close UAF (detection hunt)
   kaslr/                      the write-free text-base leak, shared by all of them
   targets/                    per-device offset headers, 19 device-builds
   Makefile                    compiles one payload from a resolved recipe
@@ -58,7 +59,7 @@ folds into the `ART_*` make variables and into the runner's contract:
 
 1. A recipe under [`../runner/recipes/`](../runner/recipes/) — one entry stage
    per kernel flavour plus any non-entry stages.
-   [`ghostlock.toml`](../runner/recipes/ghostlock.toml#L22) pairs a 6.1 and a 6.6
+   [`ghostlock.toml`](../runner/recipes/ghostlock.toml#L21) pairs a 6.1 and a 6.6
    entry with the shared
    [`handoff.suhelper`](../runner/recipes/ghostlock.toml#L19);
    [`cve64560.toml`](../runner/recipes/cve64560.toml#L33) declares `stages = []`,
@@ -81,7 +82,7 @@ The [`Makefile`](Makefile) compiles one payload from a resolved recipe. The
 source list is not written into it; it is composed from the recipe,
 [`../data/targets.json`](../data/targets.json) and the stage manifests by the
 resolver at
-[`RESOLVER := ../runner/scripts/resolve-recipe.py`](Makefile#L70). Run from
+[`RESOLVER := ../runner/scripts/resolve-recipe.py`](Makefile#L63). Run from
 `cves/`:
 
 ```sh

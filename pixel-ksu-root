@@ -19,14 +19,16 @@
 #                          entry through its declared {invoke, markers,
 #                          exit-code map, provides} contract.
 #   TARGET       codename-build for --print-contract without a device (--target)
-#   --debug-panic      run mode for reading a panic's kernel record. Stage
-#                      GhostLock, then reach a fresh post-panic boot and root it
-#                      IN PLACE (no reboot -- a reboot clears the record) to dump
-#                      /sys/fs/pstore. With --recipe <cve> that recipe is the
-#                      panic TRIGGER: it is fired under a connection watcher and
-#                      killed the instant it drops the phone, then GhostLock roots
-#                      the boot it left. Without a recipe, provoke the crash
-#                      yourself (an app, a fuzzer) while it waits.
+#   --debug-panic      run mode for reading a panic's kernel record. REQUIRES
+#                      --recipe <cve>, and that recipe must not be ghostlock:
+#                      it names the panic TRIGGER, not the thing that roots.
+#                      The trigger is fired under a connection watcher and killed
+#                      the instant it drops the phone; then GhostLock roots the
+#                      post-panic boot IN PLACE (no reboot -- a reboot clears the
+#                      record) and dumps /sys/fs/pstore. Provoking the crash by
+#                      hand while the tool waits is NOT supported: the watcher
+#                      and the trigger have to be the same process, or the drop
+#                      is missed and the run wedges.
 #   --print-contract   print the resolved contract and the exact device command
 #                      it renders, then exit. Touches no phone when TARGET is set.
 #
@@ -296,8 +298,32 @@ fi
 # panic leaves. So the trigger name is set aside and the primary contract is
 # forced back to the built-in GhostLock default; phase 1 (below) loads the
 # trigger contract on its own to fire it, then restores GhostLock for phase 2.
+#
+# --debug-panic REQUIRES a trigger recipe, and refuses ghostlock as one. Both
+# used to fall through to a "wait for the operator to crash it" branch that
+# armed a watcher in one process while the crash came from another: the drop was
+# missed, phase 2 never ran, and the run blocked until killed with no root and no
+# pstore. There is no correct way to use this mode without a trigger, so it is a
+# usage error rather than a fallback.
 TRIGGER_RECIPE=""
-if [ "${DEBUG_PANIC:-0}" = 1 ] && [ -n "$RECIPE" ] && [ "$RECIPE" != ghostlock ]; then
+if [ "${DEBUG_PANIC:-0}" = 1 ]; then
+  if [ -z "$RECIPE" ]; then
+    err "--debug-panic requires --recipe <cve>: the recipe is the panic TRIGGER."
+    err "  it is fired under a connection watcher, so the tool must own the crash."
+    err "  available triggers:"
+    for _r in "$REPO"/runner/recipes/*.toml; do
+      _n="$(basename "$_r" .toml)"
+      [ "$_n" = ghostlock ] && continue
+      err "    ./pixel-ksu-root --debug-panic --recipe $_n"
+    done
+    exit 64
+  fi
+  if [ "$RECIPE" = ghostlock ]; then
+    err "--debug-panic --recipe ghostlock is not a thing: ghostlock is the ROOTER"
+    err "  in this mode, never the trigger. Name the recipe whose panic you are"
+    err "  investigating, e.g. --recipe badepoll-esc."
+    exit 64
+  fi
   TRIGGER_RECIPE="$RECIPE"
   RECIPE="ghostlock"
 fi
@@ -568,11 +594,40 @@ else
       #   - the trigger exits  -> it stopped WITHOUT a panic (could not run/ran out).
       #   - neither, by the deadline -> the trigger runs but does not panic (e.g. a
       #     benign detection harness); give up rather than wait forever.
+      #
+      # Neither pid is an oracle on its own, and the old code treated the watcher
+      # as one:
+      #
+      #   * the TRIGGER exits first on a real panic more often than not. It
+      #     probes liveness itself (`alive`) the moment its invoke returns, and
+      #     that beats the watcher's blocked `adb shell` unwinding -- so "watcher
+      #     still alive" was read as "no drop" for a phone that had panicked, the
+      #     run exited 2, and phase 2 never ran: no root, no pstore.
+      #   * the WATCHER exits on any drop, including the trigger's OWN setup
+      #     reboot -- entry.badepoll-esc@6.1 reboots to a quiet kernel before it
+      #     races -- which would be read as a panic that has not happened yet.
+      #
+      # So: while the trigger is still working, a drop is its setup rebooting and
+      # the watcher is re-armed. Once the trigger exits, the device settles it.
       _deadline=$(( $(date +%s) + ${DEBUG_PANIC_TIMEOUT:-600} ))
-      while kill -0 "$_wpid" 2>/dev/null && kill -0 "$_tpid" 2>/dev/null \
-            && [ "$(date +%s)" -lt "$_deadline" ]; do sleep 0.5; done
-      if kill -0 "$_wpid" 2>/dev/null; then
-        # Watcher still blocked => no drop. Trigger dead = "ran out"; alive = timed out.
+      _dropped=0
+      while [ "$(date +%s)" -lt "$_deadline" ]; do
+        if ! kill -0 "$_tpid" 2>/dev/null; then
+          alive || _dropped=1
+          break
+        fi
+        if ! kill -0 "$_wpid" 2>/dev/null; then
+          if alive; then
+            wait_connection_drop & _wpid=$!      # its own reboot; keep watching
+          else
+            _dropped=1
+            break
+          fi
+        fi
+        sleep 0.5
+      done
+      if [ "$_dropped" = 0 ]; then
+        # Trigger still running = the deadline hit; trigger gone = it ran out.
         if kill -0 "$_tpid" 2>/dev/null; then
           err "trigger '$TRIGGER_RECIPE' ran ${DEBUG_PANIC_TIMEOUT:-600}s without panicking the phone — giving up"
           err "  (raise DEBUG_PANIC_TIMEOUT, or use a trigger that actually panics the kernel)"
@@ -585,19 +640,38 @@ else
         wait 2>/dev/null || true
         exit 2
       fi
+      # The watcher may still be blocked on a connection that will never answer.
+      kill "$_wpid" 2>/dev/null; pkill -P "$_wpid" 2>/dev/null
       warn "  connection lost — the trigger panicked the phone; stopping it"
       kill -TERM -"$_tpid" 2>/dev/null || true
       wait 2>/dev/null || true
       wait_device_back || { err "device did not come back after the panic"; exit 1; }
+      # Save the TRIGGER's device log before phase 2 can overwrite it. Both the
+      # trigger and GhostLock render @DEV_LOG@ to the same path, so rooting the
+      # post-panic boot replaces the very output that says what the trigger was
+      # doing when it died -- which is the whole reason this mode exists. Pull it
+      # first, into the same directory capture_panic_evidence() uses for pstore.
+      _tlog="$LOGDIR/panic-$RUNSTAMP"
+      mkdir -p "$_tlog"
+      if ash "test -s ${DEV_LOG}" 2>/dev/null; then
+        "${ADB[@]}" shell "cat ${DEV_LOG}" 2>/dev/null | strip > "$_tlog/trigger-devlog.txt" || true
+        [ -s "$_tlog/trigger-devlog.txt" ] \
+          && ok "  saved the trigger's device log -> $_tlog/trigger-devlog.txt" \
+          || warn "  the trigger's device log came back empty (panic ate the page cache?)"
+      else
+        warn "  no trigger device log at $DEV_LOG to save"
+      fi
       # Phase 2: restore the GhostLock contract the trigger overwrote and root this
       # fresh boot in place.
       step "Debug-panic phase 2: GhostLock roots the post-panic boot in place"
       load_entry_contract "ghostlock" "$_tt" "$RUN" || { err "ghostlock did not resolve"; exit 2; }
     else
-      # No trigger recipe: the operator provokes the panic themselves; just wait
-      # for the phone to drop and come back.
-      step "Armed — waiting for a panic reboot (trigger the crash now)"
-      wait_for_reboot
+      # Unreachable: the gate at TRIGGER_RECIPE above exits 64 when --debug-panic
+      # is given no trigger. Kept as an assertion rather than deleted, so a future
+      # edit that loosens the gate fails loudly here instead of silently restoring
+      # the wedging path.
+      err "internal: --debug-panic reached phase 1 with no trigger recipe"
+      exit 70
     fi
     SKIP_SETUP=1
     PANICS_SEEN=1   # force the pstore dump even though this run did not cause it

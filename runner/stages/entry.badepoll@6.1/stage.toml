@@ -1,0 +1,174 @@
+# entry.badepoll@6.1 — CVE-2026-46242 "Bad Epoll" close-vs-close UAF.
+#
+# A DETECTION hunt, not a root path. The binary is an instrument: it measures
+# whether __ep_remove()'s window can be won on this kernel and stops at the
+# answer. There is no groom, no bridge, no R/W and no effect to compose, because
+# none is implemented — `composed = false` carries that claim, and [provides] is
+# empty, so ./pixel-ksu-root --recipe badepoll takes the hunt path of
+# runner/README.md §2.3: no manager detection, no ksud, nothing late-loaded.
+#
+# What it buys over running the binary by hand is exactly what the hunt loop
+# gives every other candidate: per-shot archives, the outcome vocabulary,
+# REFUSED/PANIC budgets, and --debug-panic. That last one is the reason this
+# stage exists: this bug's failure mode IS a panic (see [invoke] --no-reclaim),
+# and the runner already knows how to stage a payload, wait out the reboot, root
+# the fresh boot in place and dump /sys/fs/pstore for the record.
+#
+# Unlike entry.cve64468@6.1 this stage needs NO root and NO setup step: epoll is
+# ungated by SELinux and reachable from the app sandbox, so the shot runs as the
+# shell uid with nothing created beforehand. That is the property that makes the
+# bug interesting, and the manifest is where it becomes checkable.
+
+schema = 1
+kind   = "entry"
+id     = "entry.badepoll@6.1"
+cve    = "CVE-2026-46242"
+kmi    = ["android14-6.1"]
+
+# No target restriction and no [facts]: the probe needs no offsets. Its reclaim
+# is same-cache (another eventpoll), so nothing in it depends on struct layout
+# or on a per-build fingerprint, and it builds for every android14-6.1 target.
+
+composed = false
+status   = "declared; builds standalone; runner-drivable as a foreign chain; the fix is absent on panther by symbol shape and the close-vs-close window IS won there — 12 of 12 hunt shots PASS, ~1 win per 490k rounds (median 412k), about one every 36 s of racing; the UAF write lands, nothing is built on top of it"
+
+[build]
+form    = "static-exe"
+entry   = "main"
+sources = ["cves/cve-2026-46242-badepoll/oracle46242.c"]
+includes = []                   # self-contained: libc + sys/epoll.h + sys/timerfd.h
+depends  = []
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-46242-oracle"
+uses_target_header = false
+
+[properties]
+# Every round is independent: fresh epoll objects, nothing held across the
+# boundary, no ledger. A shot that misses leaves the kernel exactly as it found
+# it, so retrying costs nothing.
+retry_safe  = true
+# There is no slide in this chain — the probe reads no KASLR base — so the two
+# fields say the same thing. In the DEFAULT configuration the UAF write lands on
+# an eventpoll this process owns and freed a moment earlier, so the panic risk is
+# the residual one: a foreign allocation winning the reclaim slot first. With
+# --no-reclaim that residual becomes the intent, and the risk is "certain".
+panic_risk  = { pre_slide = "low", post_slide = "low" }
+# Nothing persistent is written. The one write the kernel performs is 8 zero
+# bytes into a just-freed slab object, and there is no repair to owe for it:
+# either it landed on our own object (nothing to fix) or on a stranger's (nothing
+# we can find). Hence no restores — the honest entry is an empty list, not a
+# claim of cleanliness.
+destructive = []
+restores    = []
+# Observed nothing, would provide nothing as written: this stage reaches a
+# research answer, not a capability. Composing it would mean implementing the
+# cross-cache and the arbitrary read the upstream exploit builds on top.
+provides      = []
+requires_caps = []
+retains       = []
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/badepoll-entry"
+mode = "755"
+
+# One device-side command. --hunt gates on the ep_loop_check() oracle and then
+# races; 1500 rounds bounds a shot while the runner's own loop supplies the
+# retries. stdout is unbuffered (oracle46242.c setvbuf _IONBF), so the redirect
+# is what puts the marker stream in $DEV_LOG for archive_shot to pull, and a
+# panic mid-shot cannot take unflushed lines with it.
+#
+# To provoke a panic deliberately — the --debug-panic path — append
+# --no-reclaim, which stalls after the free so a FOREIGN allocation takes the
+# slot and the 8-byte zero lands at offsetof(struct eventpoll, refs) of a
+# stranger's object:
+#
+#   ./pixel-ksu-root --debug-panic --recipe badepoll
+#
+# and then edit this command, or run the binary directly in the trigger loop.
+# It is not the default for the same reason 64468 keeps --pump on by default:
+# the hunt wants a readable WIN, and only the panic investigation wants a panic.
+# A shot is bounded by WALL TIME, not by a round count: round cost varies with
+# the burst and with what else the phone is doing, so --max-seconds is what makes
+# a shot a predictable unit of the runner's budget. The round cap is the
+# effectively-unreachable backstop. 120s x ROOT_MAX(12) is a ~25min hunt.
+command = "cd @DEV_TMP@; @DEV_ENTRY@ --hunt 2000000 --max-seconds 120 > @DEV_LOG@ 2>&1"
+
+# No KASLR base is involved: this is a race-detection hunt, not an addressed
+# write, so nothing is replayed into it and every shot is self-contained.
+accepts_base = false
+
+# The shell uid is enough. epoll_create1/epoll_ctl/close/dup/timerfd_settime are
+# ungated by SELinux and survive an app seccomp filter — no device node, no
+# capability, no user namespace. Contrast entry.cve64468@6.1, which must open a
+# privately-named binderfs device as root.
+needs_root = false
+
+[markers]
+# The win: oracle46242.c prints this when epoll_ctl() returns 0 where it must
+# return -ELOOP, i.e. when uaf_target->refs.first has been zeroed by the UAF
+# write through the freed eventpoll.
+pass = 'a[0-9]+: WIN detected \(round=[0-9]+ launch_ahead=[0-9]+ns close=[0-9]+ns\)'
+# Narrow, and permanent by construction: the arms of the oracle disagreed, so
+# EP_MAX_NESTS or the ep_get_upwards_depth_proc() walk differs on this kernel and
+# every round would be an unreadable miss. That is a property of the target, not
+# a transient bail, so PRECONDITION_FAIL (which aborts the run) is right and
+# settle-and-retry is not.
+gate_fail = 'BADEPOLL_ORACLE_GATE_FAIL'
+# The probe holds no kernel state open and repairs nothing, so the restore
+# vocabulary stays inert; these sentinels keep the generic defaults in
+# runner/lib/exploit.sh from matching something by accident.
+restore_pass = 'BADEPOLL_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'BADEPOLL_NO_SUCH_RESTORE_BAD'
+# Real, unlike 64468's: a 1500-round race is long enough that the runner must be
+# able to tell a working shot from a wedged one. With this, the deadline SIGKILLs
+# only a shot proven hung; without it a slow shot scores PARKED.
+heartbeat = 'BADEPOLL_HEARTBEAT seq=[0-9]+'
+# On a MISS, how far the shot got — and whether the widening ever engaged, which
+# is the difference between "did not win" and "never really tried".
+diag       = '(done: rounds=[0-9]+ wins=[0-9]+ misses=[0-9]+ interrupted=[0-9]+ verdict=[a-z_]+|a[0-9]+: WIN detected).*'
+diag_count = 'rounds=[0-9]+'
+
+# Exit status -> outcome. The binary is a single writer with a fixed set of
+# codes (oracle46242.c EXIT_*), so the map is meaningful here; markers still win
+# over it, and it only refines a shot that would otherwise score a bare MISS.
+#   0  >=1 win — the pass marker fired too, so this arm is never reached
+#   1  ran to completion, no win                 -> MISS (a real attempt)
+#   2  bad argv                                  -> REFUSED (never started)
+#   3  could not build the chain/timerfd/racer   -> REFUSED
+#   4  oracle not sound — also emits gate_fail   -> PRECONDITION_FAIL
+[exit_map]
+"1" = "MISS"
+"2" = "REFUSED"
+"3" = "REFUSED"
+"4" = "PRECONDITION_FAIL"
+
+[provides]
+caps  = []
+field = ''
+label = ""
+
+# NOT a reboot. Declaring any [[setup]] opts out of the reboot-per-shot the
+# runner synthesizes for a stage that declares none (lib/exploit.sh:1027), and
+# for this stage that default is the wrong trade: rounds are independent
+# (`retry_safe = true`), a shot that does not win changes nothing at all, and a
+# reboot costs ~15s against a shot that should be spending its time racing.
+#
+# The hazard the reboot was hedging — a won round whose reclaim went to a
+# stranger, leaving 8 zeroed bytes in foreign slab memory — is real but is
+# already handled where it shows: a panic spends PANIC_MAX, gives a fresh boot
+# and is archived with its pstore record. Restore `reboot = true` here if you
+# want the silent-corruption hedge back and are willing to pay a boot per shot.
+#
+# What the step does instead is record the two facts a race archive needs and
+# cannot recover afterwards: how many CPUs were online for the shot, and which
+# kernel it ran against. Once per boot, no root.
+[[setup]]
+command = "echo badepoll-setup cpus=$(grep -c ^processor /proc/cpuinfo) kernel=$(uname -r)"
+once_per_boot = true
+needs_root = false
+description = "record the racing conditions (cpu count, kernel release) in the shot log"

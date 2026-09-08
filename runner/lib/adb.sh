@@ -120,17 +120,15 @@ wait_device_back() {
   wait_boot_minimal || { warn "device did not come back after the panic"; return 1; }
 }
 
-# Convenience for --debug-panic without a trigger recipe: block on the drop, wait
-# the device back, then let the caller root this fresh boot in place. The payload
-# is already staged; nothing runs between the drop and the root attempt, so the
-# pstore record the panic left is still there to read.
-wait_for_reboot() {
-  log "  armed — trigger the crash now; blocking until the phone drops"
-  wait_connection_drop
-  log "  connection lost — the phone is rebooting"
-  wait_device_back || return 1
-  ok "  device back — rooting in place"
-}
+# wait_for_reboot() lived here: arm a watcher, block on the connection drop, wait
+# the device back, root in place. Its only caller was --debug-panic WITHOUT a
+# trigger recipe, where the watcher and the crash were different processes -- so
+# a drop that landed while the watcher was still arming was missed, phase 2 never
+# ran, and the run blocked indefinitely with no root and no pstore. --debug-panic
+# now requires a trigger recipe (the TRIGGER_RECIPE gate in pixel-ksu-root),
+# which fires the crash from inside the watched process, so there is no caller
+# left. The pieces it was built from -- wait_connection_drop, wait_device_back --
+# are still here for anything that genuinely needs them.
 
 # Deliberate reboot. Used for the outcomes whose only safe continuation is a
 # fresh boot: REFUSED, PARKED and DIRTY. See classify_shot() in
