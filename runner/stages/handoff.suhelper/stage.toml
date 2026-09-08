@@ -9,7 +9,7 @@
 schema = 1
 kind   = "handoff"
 id     = "handoff.suhelper"
-kmi    = ["android14-6.1", "android15-6.6"]
+kmi    = ["android14-6.1", "android15-6.6", "android13-5.10"]
 
 composed = true
 status   = "composed; hardware-verified"

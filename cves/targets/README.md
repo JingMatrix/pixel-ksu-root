@@ -103,6 +103,7 @@ every device whose kernel Image is byte-identical to it.
 | `android14-6.1-akita` | android14-6.1 | akita-CP2A.260805.005 | akita |
 | `android14-6.1-cp1a` | android14-6.1 | bluejay-CP1A.260405.005 | bluejay (CP1A) |
 | `android15-6.6` | android15-6.6 | blazer-CP2A.260705.006 | blazer, frankel, mustang, rango |
+| `android13-5.10` | android13-5.10 | raven-TQ3A.230901.001.C2 | raven (TQ3A) — derived offline, never run |
 
 Every device-build still has its own `targets/<codename>-<build>/target.h` even
 when several devices point at one payload: the directory is how the build and the
