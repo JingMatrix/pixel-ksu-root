@@ -1,0 +1,27 @@
+_text = 0xffffffe054200000   (98871 vmlinux symbols)
+macro                                   derived    committed  verdict
+----------------------------------------------------------------------------
+ASHMEM_IOCTL_OFF                       0xc3e37c            -  NEW (absent from target.h)
+ASHMEM_MMAP_OFF                        0xc3ed0c            -  NEW (absent from target.h)
+ASHMEM_OPEN_OFF                        0xc3ef2c            -  NEW (absent from target.h)
+ASHMEM_RELEASE_OFF                     0xc3efb4            -  NEW (absent from target.h)
+ASHMEM_SHOW_FDINFO_OFF                 0xc3f0d4            -  NEW (absent from target.h)
+ASHMEM_FOPS_OFF                       0x1282268            -  NEW (absent from target.h)
+ASHMEM_COMPAT_IOCTL_OFF                       -            -  NO-SYMBOL (ashmem_compat_ioctl absent — static or inlined)
+ASHMEM_MISC_FOPS_OFF                          -            -  NO-SYMBOL (ashmem_misc absent — static or inlined)
+CONFIGFS_READ_ITER_OFF                 0x46516c            -  NEW (absent from target.h)
+CONFIGFS_BIN_WRITE_ITER_OFF            0x46569c            -  NEW (absent from target.h)
+COPY_SPLICE_READ_OFF                          -            -  NO-SYMBOL (copy_splice_read absent — static or inlined)
+NOOP_LLSEEK_OFF                        0x399204            -  NEW (absent from target.h)
+INIT_TASK_OFF                         0x201f440            -  NEW (absent from target.h)
+ROOT_TASK_GROUP_OFF                   0x2209580            -  NEW (absent from target.h)
+SELINUX_ENFORCING_OFF                 0x225b448            -  NEW (absent from target.h)
+SELINUX_BLOB_SIZES_OFF                0x15d21c8            -  NEW (absent from target.h)
+SECURITY_HOOK_HEADS_OFF               0x15d1ab8            -  NEW (absent from target.h)
+KMALLOC_CACHES_OFF                    0x15d15f8            -  NEW (absent from target.h)
+ANON_PIPE_BUF_OPS_OFF                 0x110a950            -  NEW (absent from target.h)
+CALL_USERMODEHELPER_EXEC_WORK_OFF       0xd3818            -  NEW (absent from target.h)
+SYSTEM_UNBOUND_WQ_OFF                 0x200ac60            -  NEW (absent from target.h)
+----------------------------------------------------------------------------
+0 mismatch, 3 unresolved symbol(s)
+NO-SYMBOL is expected for static/inlined symbols; those still need BTF or vmlinux to resolve.

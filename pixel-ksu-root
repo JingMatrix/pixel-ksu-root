@@ -1,0 +1,580 @@
+#!/usr/bin/env bash
+#
+# pixel-ksu-root — obtain temporary kernel R/W on a stock, locked-bootloader
+# Google Pixel via a userspace kernel exploit, then late-load a KernelSU
+# loadable kernel module (LKM) and hand control to the installed KernelSU
+# manager. Manager-agnostic: works with any KernelSU variant.
+#
+# Flow: preflight -> resolve target -> derive ksud from manager -> obtain root
+#       -> late-load -> verify -> teardown staging -> report. Everything is
+#       driven over `adb shell` from the host for deterministic control flow
+#       and full logs.
+#
+# Selecting what to run (runner/README.md, "Foreign-chain contract"):
+#   RECIPE       recipe to drive, by the SAME name the build uses  (--recipe)
+#                unset  => the built-in GhostLock path, which reads no manifest
+#                ghostlock / cve64560 / ... => resolve runner/stages/<entry>/stage.toml
+#                          through runner/scripts/resolve-recipe.py, exactly as
+#                          `make TARGET=<t> RECIPE=<name>` does, and drive the
+#                          entry through its declared {invoke, markers,
+#                          exit-code map, provides} contract.
+#   TARGET       codename-build for --print-contract without a device (--target)
+#   --print-contract   print the resolved contract and the exact device command
+#                      it renders, then exit. Touches no phone when TARGET is set.
+#
+# A recipe whose chain declares no CAP_SU handoff (cve64560) is a HUNT, not a
+# root: the runner drives the entry, classifies and archives every shot, and
+# skips manager detection, ksud derivation and late-load. CVE-2026-64560 has
+# never rooted a device — see cves/cve-2026-64560/README.md.
+#
+# Environment / flags:
+#   SERIAL       adb serial for a specific device            (--serial)
+#   MANAGER_PKG  installed KernelSU manager package          (--manager)
+#                required unless auto-detected (see runner/lib/install.sh:detect_manager)
+#   KMI          override the resolved kernel module interface (--kmi)
+#   PAYLOAD_ENV  payload tunables as "K=V K=V"          (--tunable K=V, repeatable)
+#                Set in the exploit's own environment through the invoke
+#                template's env prefix. Rejected before the phone is touched if
+#                the name is not in the resolved stage's [tunables].env or not
+#                a string in the payload artifact about to be pushed.
+#                Works with and without --recipe. The ones that decide the run:
+#                  RECLAIM_VEHICLE=pselect|tcp-zc   which syscall re-occupies
+#                                the freed rt_mutex_waiter frame. Parsed by
+#                                name; an unknown value refuses the shot.
+#                  PSELECT_SHIFT=<int>             fd_set word the waiter is
+#                                assumed to land on (pselect vehicle only)
+#                  PAGE_GEOMETRY=pselect|tcp       sprayed page geometry, a
+#                                separate axis from the vehicle
+#   CLIENT_UID   uid granted root by the exploit (default 2000, the adb shell)
+#   APP_UID      manager app uid the daemon authorizes (default: manager's uid)
+#   ROOT_MAX     root attempts before giving up     (default 4)
+#   VERIFY_TRIES driver version polls after load    (default 12)
+#
+# Shot budgets and timing (runner/README.md, "Shot classification"). A shot that never
+# started (REFUSED) or that panicked spends its OWN budget, not an attempt, so
+# ROOT_MAX counts classifiable attempts:
+#   REFUSED_MAX  shots that produced no output at all (default 3)
+#   PANIC_MAX    reboots tolerated across the run    (default 3)
+#   REFUSED_WALL seconds under which a silent shot is a refusal (default 5)
+#   SHOT_TIMEOUT wall seconds before a shot is parked or killed (default 240)
+#   SETTLE_SECS  seconds a REFUSED shot settles in place        (default 20)
+# Every shot's device log is archived under logs/shots/<run>/ with an index.tsv.
+# SHOT_TIMEOUT's default is derived from measured shot durations — the
+# derivation is with the assignment below.
+set -u
+
+REPO="$(cd "$(dirname "$0")" && pwd)"
+RUN="$REPO/runner"
+LIB="$RUN/lib"
+ART="$REPO/artifacts"
+LOGDIR="$REPO/logs"
+# Consumed by a sourced lib (shellcheck cannot follow `.` sources).
+# shellcheck disable=SC2034
+MANIFEST="$REPO/data/targets.json"   # runner/lib/select.sh
+
+# --------------------------------------------------------------- config -------
+SERIAL="${SERIAL:-}"
+# Empty means take the built-in GhostLock path and read no manifest, which needs
+# no resolver, python3 or target directory.
+RECIPE="${RECIPE:-}"
+TARGET="${TARGET:-}"
+PRINT_CONTRACT=0
+MANAGER_PKG="${MANAGER_PKG:-}"
+KMI="${KMI:-}"                       # empty => resolved from the running kernel
+CLIENT_UID="${CLIENT_UID:-2000}"     # adb shell uid; the exploit grants it root
+APP_UID="${APP_UID:-}"               # empty => derived from the manager package
+# Every root this runner has recorded arrived by shot 9, and most by shot 3:
+# shots 3, 9, 3 in the archived 20260902 runs, and 3 and 2 on 20260907. Panics
+# before a win: 2, then 1. So 12 attempts and 10 panics bound the observed
+# distribution with room to spare, where 40 and 40 licensed 88 shots and half an
+# hour of pure rebooting before giving up. Raise them for a hunt on a target
+# whose distribution is not known.
+ROOT_MAX="${ROOT_MAX:-4}"
+VERIFY_TRIES="${VERIFY_TRIES:-12}"
+# Consumed by runner/lib/exploit.sh and runner/lib/adb.sh.
+# shellcheck disable=SC2034
+REFUSED_MAX="${REFUSED_MAX:-3}"
+# shellcheck disable=SC2034
+PANIC_MAX="${PANIC_MAX:-3}"
+# shellcheck disable=SC2034
+REFUSED_WALL="${REFUSED_WALL:-5}"
+# SHOT_TIMEOUT is derived from measured win times. The 16 winning shots of the
+# original hand-timed campaign took, in seconds:
+#
+#     77 79 94 101 113 161 202 304 306 312 332 335 358 360 368 392
+#     n=16  min=77  median=305  mean=243.4  sd=119.9  max=392
+#
+# Two independent estimators land in the same place: mean+3sd = 603 s, and 1.5x
+# the slowest observed win = 588 s. 600 s satisfies both. It clears the slowest
+# recorded win (392 s) by 208 s — 1.53x — and the slowest recorded panic (339 s)
+# by 261 s, so no shot that has ever produced a result would be cut short.
+#
+# A stage emitting no *_HEARTBEAT marker is PARKED rather than SIGKILLed
+# (runner/lib/exploit.sh), so a large timeout costs bounded latency on a hung
+# shot.
+#
+# To re-derive: every shot's wall time is column 6 of logs/shots/<run>/index.tsv
+# (time, seq, outcome, restore, rc, wall, file), so the win distribution is
+#
+#     awk -F'\t' '$3=="PASS"{print $6}' logs/shots/*/index.tsv
+#
+# Only a handful of runs are archived at a time — logs/ is gitignored — so
+# re-derive once enough of them have accumulated rather than from a single run.
+# shellcheck disable=SC2034
+SHOT_TIMEOUT="${SHOT_TIMEOUT:-240}"
+# shellcheck disable=SC2034
+SETTLE_SECS="${SETTLE_SECS:-20}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --serial)  SERIAL="$2"; shift 2 ;;
+    --manager) MANAGER_PKG="$2"; shift 2 ;;
+    --kmi)     KMI="$2"; shift 2 ;;
+    --recipe)  RECIPE="$2"; shift 2 ;;
+    --target)  TARGET="$2"; shift 2 ;;
+    --tunable) PAYLOAD_ENV="${PAYLOAD_ENV:-}${PAYLOAD_ENV:+ }$2"; shift 2 ;;
+    --print-contract) PRINT_CONTRACT=1; shift ;;
+    # Print the header block: line 2 to the first non-comment line.
+    -h|--help) sed -n '2,${/^#/!q;p;}' "$0"; exit 0 ;;
+    *) printf 'unknown argument: %s\n' "$1" >&2; exit 64 ;;
+  esac
+done
+
+# device-side paths (DEV_SU / DEV_LOG are consumed by sourced libs)
+DEV_TMP=/data/local/tmp
+DEV_HELPER="$DEV_TMP/cve-helper"
+DEV_PAYLOAD="$DEV_TMP/exploit-payload.so"
+DEV_KSUD="$DEV_TMP/ksud-manager"
+# Where a device-exec entry is staged. Overwritten from the manifest's
+# [invoke].dest by load_entry_contract; unused by the GhostLock path.
+# shellcheck disable=SC2034
+DEV_ENTRY="$DEV_TMP/entry-stage"      # runner/lib/exploit.sh
+# shellcheck disable=SC2034
+DEV_SU="$DEV_TMP/su"                  # runner/lib/adb.sh (asu)
+# shellcheck disable=SC2034
+DEV_LOG="$DEV_TMP/exploit.log"        # runner/lib/exploit.sh
+# Per-boot dirty journal: holds the btime of a boot on which a restore debt
+# could not be discharged, so neither a later shot nor a later run composes
+# over damaged kernel state (runner/lib/exploit.sh:classify_shot).
+# shellcheck disable=SC2034
+DEV_DIRTY="$DEV_TMP/exploit.dirty"    # runner/lib/exploit.sh
+# KernelSU's own su, used for teardown: the temp-su daemon is dead by then.
+# shellcheck disable=SC2034
+DEV_KSU_SU=/system/bin/su             # runner/lib/install.sh (teardown_staging)
+# apex bin dir the exploit mounts a tmpfs over to stage its temp su; it precedes
+# /system/bin in the shell PATH, which is why it must be unmounted afterwards.
+# shellcheck disable=SC2034
+SU_SHADOW_DIR=/apex/com.android.virt/bin   # runner/lib/install.sh (teardown_staging)
+
+WORKDIR="$(mktemp -d)"
+trap 'rm -rf "$WORKDIR"' EXIT
+
+RUNSTAMP="$(date +%Y%m%d-%H%M%S)"
+RUNLOG="$LOGDIR/run-$RUNSTAMP.log"
+# One archived device log per shot, so a panic's evidence survives the shot that
+# follows it.
+# shellcheck disable=SC2034
+SHOTDIR="$LOGDIR/shots/$RUNSTAMP"     # runner/lib/exploit.sh
+# --print-contract opens no run: no run log, no per-run shot archive.
+if [ "$PRINT_CONTRACT" = 1 ]; then RUNLOG=/dev/null; else mkdir -p "$LOGDIR" "$SHOTDIR"; fi
+
+# shellcheck source=runner/lib/log.sh
+. "$LIB/log.sh"
+# shellcheck source=runner/lib/adb.sh
+. "$LIB/adb.sh"
+# shellcheck source=runner/lib/select.sh
+. "$LIB/select.sh"
+# shellcheck source=runner/lib/exploit.sh
+. "$LIB/exploit.sh"
+# shellcheck source=runner/lib/install.sh
+. "$LIB/install.sh"
+
+# Payload tunables are interpolated into an `adb shell` command line, so they
+# are checked the moment the libraries that parse them are available -- before
+# preflight, and on the --print-contract path too, which renders the same string
+# without running it.
+validate_payload_env || exit 3
+
+# =============================================================== preflight ====
+step "Preflight"
+
+# One runner per device, enforced.
+#
+# Two runners driving the same phone fire exploits into the same kernel at the
+# same time. They corrupt each other's shots, each reads the other's output out
+# of the shared device log, and the concurrency itself can panic the kernel --
+# so the resulting PANIC is an artefact of the collision. The lock is held for
+# the life of the process and released
+# by the kernel when it exits, so a killed run leaves nothing to clean up.
+# --print-contract touches no phone and takes no lock.
+if [ "$PRINT_CONTRACT" != 1 ]; then
+  # ANDROID_SERIAL selects the device just as --serial does, so the lock has to
+  # see it too, or every run on every device shares one "default" lock.
+  _lock="${TMPDIR:-/tmp}/pixel-ksu-root.${SERIAL:-${ANDROID_SERIAL:-default}}.lock"
+
+  # The lock records a pid; it is not an flock.
+  #
+  # An flock lives on a file descriptor, and every child inherits it: not just
+  # the shot and the log stream, but each adb invocation and, worst of all, the
+  # adb server daemon, which outlives every run that started it. Any one of them
+  # keeps the lock held long after the runner is gone, and Ctrl-C leaves the file
+  # behind with no owner at all. A recorded pid has neither problem -- liveness
+  # is checked when the lock is contested, and a lock whose owner is gone is
+  # simply taken.
+  #
+  # The lock records the holder's pid AND the boot (btime) it is driving. It is
+  # genuinely held only by a live runner on the SAME boot; a runner that crashed
+  # and rebooted the phone leaves a lock whose btime is a boot ago, which the
+  # next run simply takes. One host process holds one lock for its whole life,
+  # including across a device reboot: the host process never dies.
+  _lock_write() {
+    printf 'pid %s btime %s started %s by %s\n' \
+      "$$" "$(boot_epoch)" "$(date +%H:%M:%S)" "${USER:-?}" >"$_lock"
+  }
+  # 0 = we now hold it; 1 = a live runner holds it on THIS boot.
+  _lock_take() {
+    if ( set -o noclobber; : >"$_lock" ) 2>/dev/null; then _lock_write; return 0; fi
+    local hpid hbt curbt
+    hpid="$(awk '{print $2}' "$_lock" 2>/dev/null)"
+    hbt="$(awk '{print $4}' "$_lock" 2>/dev/null)"
+    curbt="$(boot_epoch)"
+    if [ -n "$hpid" ] && kill -0 "$hpid" 2>/dev/null &&
+       tr '\0' ' ' < "/proc/$hpid/cmdline" 2>/dev/null | grep -q pixel-ksu-root &&
+       [ -n "$hbt" ] && [ "$hbt" = "$curbt" ]; then
+      return 1
+    fi
+    _lock_write; return 0   # dead holder, or its boot is gone -> steal
+  }
+  # Release only if we still own it (a stolen lock now names someone else).
+  _lock_owned() { [ "$(awk '{print $2}' "$_lock" 2>/dev/null)" = "$$" ]; }
+  if ! _lock_take; then
+    err "another pixel-ksu-root is already driving ${SERIAL:-${ANDROID_SERIAL:-this device}}"
+    err "  held by: $(cat "$_lock" 2>/dev/null)"
+    err "  lock: $_lock"
+    err "running two exploits against one kernel corrupts both and can panic the"
+    err "  phone. Wait for that run to finish, or stop it first."
+    exit 1
+  fi
+  # Interrupting the runner does not stop the exploit.
+  #
+  # The payload runs on the phone, under an adb shell the runner merely waits on.
+  # Kill the runner and the payload keeps racing the kernel unattended, and
+  # panics it minutes later -- long enough to reboot away a root some LATER run
+  # has already won. An abort therefore stops the device side too. A normal exit
+  # does not: by then the payload is finished, and cve-helper is also the temp-su
+  # daemon that late-load tears down on its own schedule.
+  _release_lock() { _lock_owned && rm -f "$_lock"; rm -rf "$WORKDIR"; }
+  _abort() {
+    trap - INT TERM EXIT
+    warn "interrupted — stopping the payload on the device"
+    [ -n "${SHOT_STREAM_PID:-}" ] && kill "$SHOT_STREAM_PID" 2>/dev/null
+    [ -n "${SHOT_CLIENT_PID:-}" ] && kill "$SHOT_CLIENT_PID" 2>/dev/null
+    "${ADB[@]}" shell "pkill -f '$DEV_HELPER'; pkill -f '$DEV_ENTRY'" >/dev/null 2>&1 || true
+    _release_lock
+    exit "${1:-130}"
+  }
+  trap '_release_lock' EXIT
+  trap '_abort 130' INT
+  trap '_abort 143' TERM
+fi
+
+# --print-contract with an explicit TARGET is a pure host-side question and must
+# not need a phone; every other path still starts by waiting for one.
+if [ "$PRINT_CONTRACT" = 1 ] && [ -n "$TARGET" ]; then
+  log "host-only: printing the contract for TARGET=$TARGET, no device required"
+else
+  wait_boot || { err "device not ready"; exit 1; }
+fi
+
+# ---- recipe selection ------------------------------------------------------
+# The operator names a recipe exactly as the build does, and it is resolved by
+# the same runner/scripts/resolve-recipe.py against the same runner/recipes/ and runner/stages/, with
+# the same ARCH-G* gates. One recipe name, one resolver for build and run.
+#
+# With RECIPE unset nothing here runs and runner/lib/exploit.sh keeps its
+# built-in GhostLock defaults.
+# shellcheck disable=SC2034  # ENTRY_RECIPE is read by runner/lib/exploit.sh:print_contract
+ENTRY_RECIPE="$RECIPE"
+if [ -n "$RECIPE" ]; then
+  if [ -z "$TARGET" ]; then
+    TARGET="$(getprop ro.product.device)-$(getprop ro.build.display.id)"
+  fi
+  log "recipe '$RECIPE' selected for $TARGET — resolving stages the way the build does"
+  load_entry_contract "$RECIPE" "$TARGET" "$RUN" || {
+    err "run  make -C $REPO/cves TARGET=$TARGET RECIPE=$RECIPE check  for the same gate"
+    exit 2
+  }
+  # The stage now says which knobs it has, so a misspelled or stale --tunable
+  # can be rejected here rather than becoming a silent no-op on the phone.
+  validate_payload_env || exit 3
+  ok "entry $ENTRY_ID  invoke=$INVOKE_KIND  composed=$ENTRY_COMPOSED  provides=[${PROVIDES_CAPS:-}]"
+  log "  status: $ENTRY_STATUS"
+fi
+
+if [ "$PRINT_CONTRACT" = 1 ]; then
+  step "Runner contract (${RECIPE:-built-in default, no manifest read})"
+  print_contract
+  exit 0
+fi
+
+if chain_has_su; then
+  if [ -z "$MANAGER_PKG" ]; then
+    log "no MANAGER_PKG set — scanning installed packages for a KernelSU manager"
+    MANAGER_PKG="$(detect_manager || true)"
+    [ -n "$MANAGER_PKG" ] || { err "no KernelSU manager found — set MANAGER_PKG"; exit 1; }
+    ok "auto-detected manager: $MANAGER_PKG"
+  fi
+
+  # The exploit daemon authorizes one app uid; default it to the manager's uid.
+  if [ -z "$APP_UID" ]; then
+    APP_UID="$(manager_uid "$MANAGER_PKG")"
+    [ -n "$APP_UID" ] || { err "manager $MANAGER_PKG not installed"; exit 1; }
+  fi
+else
+  # The chain declares no CAP_SU handoff, so it cannot install anything and
+  # there is nothing for a manager to authorize. This is a HUNT: drive the
+  # entry, classify and archive every shot, install nothing.
+  warn "chain '${RECIPE}' provides [${CHAIN_CAPS:-none}] — no CAP_SU handoff"
+  warn "this is a HUNT, not a root: no manager detection, no ksud, no late-load"
+fi
+
+# =============================================================== resolve =======
+step "Resolve target"
+resolve_target; rc=$?
+if [ $rc -eq 1 ]; then err "target resolution failed"; exit 1; fi
+log "device=$TARGET_CODENAME build=$BUILD kernel=$KREL kmi=$KMI manager=$MANAGER_PKG uid=$APP_UID"
+if [ $rc -eq 2 ]; then
+  err "device $TARGET_CODENAME ($BUILD, kernel $KREL) is not a supported target"
+  err "the exploit cannot run here (kernel resolves kmi=$KMI only). supported targets:"
+  python3 - "$MANIFEST" <<'PY' 2>/dev/null | sed 's/^/    /' | while read -r l; do err "$l"; done
+import json, sys
+for e in json.load(open(sys.argv[1]))["devices"]:
+    print("%s-%s" % (e["codename"], e["build"]))
+PY
+  err "to add this device: harvest it (runner/scripts/harvest-live.sh) and add a data/targets.json row"
+  exit 1
+fi
+
+# Save the kernel's record of a panic this run caused.
+#
+# pstore/ramoops holds the oops that rebooted the phone and keeps only the most
+# recent one, so a run that panicked takes it here or loses it to the next
+# reboot.
+#
+# It is not root-only, though it looks it: /sys/fs/pstore is dr-xr-x--- with
+# group log, adb shell is in group log, and sepolicy grants shell read on
+# pstorefs:file while denying dir read. So `ls /sys/fs/pstore` fails and
+# `cat /sys/fs/pstore/console-ramoops-0` returns the whole previous boot's
+# console to uid 2000. This runs on any boot, rooted or not, which is what the
+# runs that panic before reaching root need. See README.md, "Debugging a
+# panic".
+#
+# That last paragraph is also why this is defined out here rather than inside
+# the CAP_SU branch below: nothing about it needs root, and a HUNT chain never
+# enters that branch — yet the abort path every hunt takes when it finishes
+# without root calls it. Defined inside, the call was a `command not found`, and
+# the pstore record of a panic the run had just caused was lost with it.
+capture_panic_evidence() {
+  local reason dst
+  # Only a panic this run caused is ours to explain.
+  [ "${PANICS_SEEN:-0}" -gt 0 ] || return 0
+  reason="$(getprop sys.boot.reason.last)"
+  dst="$LOGDIR/panic-$RUNSTAMP"
+  mkdir -p "$dst"
+  # A lost connection is not proof of a panic: a drop can equally be an ordinary
+  # reboot, which leaves no kernel record at all. Name which of the two occurred
+  # before claiming to have captured anything.
+  case "$reason" in
+    *panic*|*oops*|*watchdog*|*bug*)
+      warn "this run panicked ${PANICS_SEEN} time(s) (last boot ended in: ${reason:-unknown}) — saving the kernel's record" ;;
+    *)
+      warn "this run lost the device ${PANICS_SEEN} time(s), but the last boot ended in '${reason:-unknown}', not a panic — looking for a record anyway" ;;
+  esac
+  # Named one by one on purpose: the directory cannot be listed as shell (see
+  # the header), so there is nothing to glob.
+  local f saved=0
+  for f in console-ramoops-0 dmesg-ramoops-0 pmsg-ramoops-0; do
+    ash "cat /sys/fs/pstore/$f" 2>/dev/null | strip > "$dst/$f.txt" 2>/dev/null || true
+    if [ -s "$dst/$f.txt" ]; then saved=$(( saved + 1 )); else rm -f "$dst/$f.txt"; fi
+  done
+  # Count the pstore files specifically, not everything in the directory, so a
+  # directory-wide test cannot report a saved kernel record on the strength of
+  # some other file that landed here.
+  if [ "$saved" -gt 0 ]; then
+    ok "  panic record saved: $dst"
+    # Print the oops itself: the fault line, pc/lr, the faulting task, and the
+    # call trace's FRAMES -- not a bare "Call trace:" with nothing under it, and
+    # not the kernel command line, which a naive KASAN match pulls in because
+    # the cmdline carries kasan.* parameters. Everything from the first oops
+    # marker, the frames indented under the first trace, and nothing after it.
+    awk '
+      /Unable to handle|kernel BUG at|Internal error: Oops/ { if (!seen) seen = 1 }
+      !seen { next }
+      /Modules linked in|^\[PRE\]|Kernel command line/ { next }
+      /Unable to handle|kernel BUG at|Internal error|CPU: |Comm: |pc : |lr : |Kernel panic/ { print; next }
+      /Call trace:/ { intrace = 1; print; next }
+      intrace {
+        # a frame looks like "[ time][ tid]  symbol+0x.../0x..."
+        if ($0 ~ /\+0x[0-9a-f]+\/0x[0-9a-f]+/) { print; frames++; if (frames < 14) next }
+        exit
+      }
+    ' "$dst"/console-ramoops-0.txt 2>/dev/null \
+      | sed -E 's/^\[[^]]*\]\[[^]]*\] ?//' | head -22 \
+      | while read -r l; do log "    $l"; done
+  else
+    warn "  pstore held nothing for this boot — no kernel record to explain"
+    warn "  (sys.boot.reason.last = ${reason:-unknown}; a reboot leaves none)"
+    # Succeeds only when the directory is empty, so any trigger logs phase 1
+    # put here survive.
+    rmdir "$dst" 2>/dev/null || true
+  fi
+}
+
+# =============================================================== derive ksud ===
+# ksud must come from the installed manager (the ko is signature-locked to it).
+# Both this and the resident-module early exit belong to the CAP_SU handoff; a
+# hunt chain has neither, and must not be short-circuited by a KernelSU that is
+# already loaded — the point of the run is the entry, not the module.
+if chain_has_su; then
+  step "Derive ksud from installed manager ($MANAGER_PKG)"
+  derive_ksud || exit 1
+
+  # A resident module needs no further work — probe with a plain-shell syscall.
+  if ksu_loaded "$DEV_KSUD"; then
+    step "KernelSU already loaded"
+    ash "$DEV_KSUD debug info" 2>&1 | strip | tee_log
+    # An earlier run in this same boot may have left its staging mount behind.
+    teardown_staging
+    ok "SUCCESS — KernelSU already resident (version=$(ksu_version "$DEV_KSUD")). Log: $RUNLOG"
+    exit 0
+  fi
+fi
+
+# =============================================================== obtain root ===
+# Two invocation shapes, two things to stage. device-exec pushes ONE
+# static binary — the artifact `make TARGET=<t> RECIPE=<r>` produced for this
+# exact target, named by the manifest, so the binary that runs is by
+# construction the binary that was built.
+if [ "$INVOKE_KIND" = device-exec ]; then
+  step "Push entry binary ($ENTRY_ID)"
+  if [ -z "$ENTRY_ARTIFACT" ] || [ ! -f "$ENTRY_ARTIFACT" ]; then
+    err "entry binary missing: ${ENTRY_ARTIFACT:-<none declared>}"
+    err "build it:  make -C $REPO/cves TARGET=$TARGET RECIPE=$RECIPE"
+    exit 2
+  fi
+  apush_verified "$ENTRY_ARTIFACT" "$DEV_ENTRY" || exit 2
+  ash "chmod ${ENTRY_MODE:-755} $DEV_ENTRY" 2>/dev/null
+else
+  if [ $rc -eq 2 ]; then err "cannot obtain root without a payload"; exit 2; fi
+
+  step "Push exploit artifacts"
+  if [ ! -f "$ART/cve-helper" ] || [ ! -f "$EXPLOIT_PATH" ]; then
+    _t="${TARGET:-$TARGET_CODENAME-$BUILD}"; _r="${RECIPE:-ghostlock}"
+    err "exploit artifacts missing — build them before rooting:"
+    [ -f "$ART/cve-helper" ] || err "  missing  $ART/cve-helper"
+    [ -f "$EXPLOIT_PATH" ]   || err "  missing  $EXPLOIT_PATH  (payload $EXPLOIT_FILE)"
+    err "build all payloads:  runner/scripts/build-payloads.sh   (needs ANDROID_HOME or ANDROID_NDK_HOME)"
+    err "or just this target:  make -C $REPO/cves TARGET=$_t RECIPE=$_r all release"
+    exit 2
+  fi
+  # Last gate before the payload leaves the host: every requested knob has to be
+  # a string the selected artifact actually contains. A payload built before a
+  # knob existed reads none of it and roots with its compiled-in default, which
+  # looks exactly like the run the operator asked for.
+  validate_payload_env "$EXPLOIT_PATH" || exit 3
+  apush_verified "$ART/cve-helper" "$DEV_HELPER" || exit 2
+  apush_verified "$EXPLOIT_PATH"   "$DEV_PAYLOAD" || exit 2
+  # Re-push whatever a panic reboot lost. A panic does not flush the filesystem,
+  # so a file written before it can come back the right size with uncommitted
+  # data blocks -- all NUL. A gutted payload starts and prints nothing, which is
+  # indistinguishable from a refusal, so the run burns its refusal budget and
+  # reboots instead of reporting the real cause. obtain_root calls this after
+  # every panic; it is a no-op when the copies still match.
+  recheck_artifacts() {
+    local pair src dst want got rc=0
+    # ksud is included: it is derived from the manager's APK through the package
+    # manager, which a device sitting at the lock screen after a reboot cannot be
+    # relied on to answer. It is extracted once, before any reboot, and restored
+    # from that host copy afterwards -- never re-derived.
+    for pair in "$ART/cve-helper:$DEV_HELPER" "$EXPLOIT_PATH:$DEV_PAYLOAD" \
+                "${KSUD_HOST:-}:$DEV_KSUD"; do
+      src="${pair%%:*}"; dst="${pair##*:}"
+      [ -f "$src" ] || continue
+      want="$(md5sum "$src" 2>/dev/null | awk '{print $1}')"
+      got="$(ash "md5sum $dst 2>/dev/null" | tr -d '\r' | awk '{print $1}')"
+      [ -n "$want" ] && [ "$want" = "$got" ] && continue
+      warn "  $dst no longer matches the host build — re-pushing"
+      apush_verified "$src" "$dst" || rc=1
+      ash "chmod 755 $dst" 2>/dev/null
+    done
+    return $rc
+  }
+  ash "chmod 755 $DEV_HELPER $DEV_PAYLOAD" 2>/dev/null
+fi
+
+if root_oracle; then
+  ok "already rooted — skipping exploit"
+else
+  # A reboot can land the device on the lock screen, where the package manager is
+  # not dependable. Everything derived from it -- the manager package, its uid,
+  # and ksud extracted from its APK -- is already resolved by this point, so
+  # confirm the on-device copies are complete before the first reboot rather than
+  # discovering a gap after one.
+  if plan_reboots; then
+    step "Stage everything before rebooting"
+    _missing=""
+    for _f in "$DEV_HELPER" "$DEV_PAYLOAD" "$DEV_KSUD"; do
+      ash "test -s $_f" >/dev/null 2>&1 || _missing="$_missing $_f"
+    done
+    if [ -n "$_missing" ]; then
+      err "not staged on the device:$_missing"
+      err "a reboot precedes every shot and these cannot be re-derived from a"
+      err "locked device. Fix the staging above."
+      exit 2
+    fi
+    ok "  helper, payload and ksud are on the device and survive a reboot"
+  fi
+
+  obtain_root; orc=$?
+  if [ $orc -ne 0 ]; then
+    case $orc in
+      3) err "aborted: a stage precondition failed — per-shot logs in $SHOTDIR" ;;
+      4) err "HELD — the exploit is holding a live kernel hook; the device was NOT rebooted."
+         err "This is the furthest CVE-2026-64560 reaches (forged bridge installed, not"
+         err "converted to root). Examine the live bridge, or 'adb reboot' to recover."
+         err "Per-shot logs in $SHOTDIR"
+         exit 4 ;;
+      *) if chain_has_su; then
+           err "failed to obtain root — per-shot logs in $SHOTDIR"
+         else
+           # Expected for a hunt chain: it has no handoff, so it has no way to
+           # reach root at all. The evidence, not the verdict, is the product.
+           err "hunt finished without root — every shot is classified in $SHOTDIR/index.tsv"
+           # Name the CVE this run actually hunted, not a hardcoded one: every
+           # hunt recipe reached this line and was told about 64560.
+           err "${ENTRY_CVE:-this chain} has never rooted a device; see its README under cves/"
+         fi ;;
+    esac
+    # The record before the verdict: a run that panicked its way to nowhere is
+    # the run with the most to explain, and it exits here.
+    capture_panic_evidence
+    exit 2
+  fi
+fi
+ok "ROOT: $(asu id | strip)"
+capture_panic_evidence
+
+
+# =============================================================== install ======
+if install_ksu; then
+  # Root is live; drop the exploit's PATH shadow so `adb shell su` reaches
+  # KernelSU's su instead of the temp su whose daemon late-load just killed.
+  teardown_staging
+  step "Kernel evidence (driver self-report, no root needed)"
+  ash "$DEV_KSUD debug info" 2>&1 | strip | tee_log
+  ok "SUCCESS — KernelSU is loaded and answering (version=${KSU_VER:-?}). Full log: $RUNLOG"
+  exit 0
+else
+  err "root was obtained, but the KernelSU driver never came up. Full log: $RUNLOG"
+  exit 3
+fi

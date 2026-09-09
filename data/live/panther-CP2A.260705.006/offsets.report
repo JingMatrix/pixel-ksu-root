@@ -1,0 +1,115 @@
+_text  = 0xffffffdbc3a00000   (98630 vmlinux symbols)
+Image  = 35633664 bytes      KIMAGE_TEXT_BASE = 0xffffffc008000000
+
+== symbols (kallsyms) ==
+macro                                   derived    committed  verdict
+----------------------------------------------------------------------------
+ASHMEM_IOCTL_OFF                       0xc38d28     0xc38d28  match
+ASHMEM_MMAP_OFF                        0xc396b8     0xc396b8  match
+ASHMEM_OPEN_OFF                        0xc398d8     0xc398d8  match
+ASHMEM_RELEASE_OFF                     0xc39960     0xc39960  match
+ASHMEM_SHOW_FDINFO_OFF                 0xc39a80     0xc39a80  match
+ASHMEM_FOPS_OFF                       0x1280b50    0x1280b50  match
+CONFIGFS_READ_ITER_OFF                 0x464400     0x464400  match
+CONFIGFS_BIN_WRITE_ITER_OFF            0x464930     0x464930  match
+COPY_SPLICE_READ_OFF                   0x3e5fd4     0x3e5fd4  match
+NOOP_LLSEEK_OFF                        0x3986dc     0x3986dc  match
+INIT_TASK_OFF                         0x201f640    0x201f640  match
+ROOT_TASK_GROUP_OFF                   0x2208580    0x2208580  match
+SELINUX_ENFORCING_OFF                 0x225a420    0x225a420  match
+SELINUX_BLOB_SIZES_OFF                0x15ceb88    0x15ceb88  match
+SECURITY_HOOK_HEADS_OFF               0x15ce478    0x15ce478  match
+KMALLOC_CACHES_OFF                    0x15cdfb8    0x15cdfb8  match
+ANON_PIPE_BUF_OPS_OFF                 0x1109910    0x1109910  match
+CALL_USERMODEHELPER_EXEC_WORK_OFF       0xd36f4      0xd36f4  match
+SYSTEM_UNBOUND_WQ_OFF                 0x200ae60    0x200ae60  match
+SLIDE_NFULNL_LOGGER_OFF               0x20129d0    0x20129d0  match
+SLIDE_SYSCTL_BOOTID_OFF               0x227b498    0x227b498  match
+SLIDE_LOGGERS_0_1_OFF                 0x2012920    0x2012920  match
+SLIDE_RANDOM_BOOT_ID_DATA_OFF         0x2137d08    0x2137d08  match
+
+== struct fields (BTF) ==
+   KMI stability is an assumption; BTF is the measurement.
+macro                                   derived    committed  verdict
+----------------------------------------------------------------------------
+TASK_PID_OFF                              0x630        0x630  match
+TASK_TGID_OFF                             0x634        0x634  match
+TASK_REAL_PARENT_OFF                      0x640        0x640  match
+TASK_REAL_CRED_OFF                        0x830        0x830  match
+TASK_CRED_OFF                             0x838        0x838  match
+TASK_COMM_OFF                             0x848        0x848  match
+TASK_TASKS_OFF                            0x550        0x550  match
+TASK_SECCOMP_OFF                          0x900        0x900  match
+TASK_ATOMIC_FLAGS_OFF                     0x5f0        0x5f0  match
+FAKE_TASK_USAGE_OFF                        0x40         0x40  match
+FAKE_TASK_PRIO_OFF                         0x84         0x84  match
+FAKE_TASK_NORMAL_PRIO_OFF                  0x8c         0x8c  match
+FAKE_TASK_TASK_GROUP_OFF                  0x348        0x348  match
+FAKE_TASK_PI_LOCK_OFF                     0x924        0x924  match
+FAKE_TASK_PI_WAITERS_OFF                  0x938        0x938  match
+FAKE_TASK_PI_TOP_TASK_OFF                 0x948        0x948  match
+FAKE_TASK_PI_BLOCKED_ON_OFF               0x950        0x950  match
+CRED_UID_OFF                                0x4          0x4  match
+CRED_SECUREBITS_OFF                        0x24         0x24  match
+CRED_CAPS_OFF                              0x28         0x28  match
+CRED_SECURITY_OFF                          0x78         0x78  match
+MM_OWNER_OFF                              0x338        0x338  match
+WAITER_TREE_ENTRY_OFF                       0x0          0x0  match
+WAITER_PI_TREE_ENTRY_OFF                   0x18         0x18  match
+WAITER_TASK_OFF                            0x30         0x30  match
+WAITER_LOCK_OFF                            0x38         0x38  match
+WAITER_WAKE_STATE_OFF                      0x40         0x40  match
+WAITER_WW_CTX_OFF                          0x50         0x50  match
+FOPS_OWNER_OFF                              0x0          0x0  match
+FOPS_LLSEEK_OFF                             0x8          0x8  match
+FOPS_READ_OFF                              0x10         0x10  match
+FOPS_WRITE_OFF                             0x18         0x18  match
+FOPS_READ_ITER_OFF                         0x20         0x20  match
+FOPS_WRITE_ITER_OFF                        0x28         0x28  match
+FOPS_IOCTL_OFF                             0x50         0x50  match
+FOPS_COMPAT_IOCTL_OFF                      0x58         0x58  match
+FOPS_MMAP_OFF                              0x60         0x60  match
+FOPS_OPEN_OFF                              0x70         0x70  match
+FOPS_RELEASE_OFF                           0x80         0x80  match
+FOPS_SPLICE_READ_OFF                       0xc8         0xc8  match
+FOPS_SHOW_FDINFO_OFF                       0xe0         0xe0  match
+STRUCT_PAGE_SIZE                           0x40         0x40  match
+STRUCT_PAGE_COMPOUND_HEAD_OFF               0x8          0x8  match
+WQ_DFL_PWQ_OFF                             0xb0         0xb0  match
+PWQ_WQ_OFF                                  0x8          0x8  match
+PWQ_WORK_COLOR_OFF                         0x10         0x10  match
+PWQ_REFCNT_OFF                             0x18         0x18  match
+PWQ_NR_IN_FLIGHT_OFF                       0x1c         0x1c  match
+PWQ_NR_ACTIVE_OFF                          0x5c         0x5c  match
+PWQ_MAX_ACTIVE_OFF                         0x60         0x60  match
+POOL_WORKLIST_OFF                          0x28         0x28  match
+POOL_NR_IDLE_OFF                           0x3c         0x3c  match
+WORK_DATA_OFF                               0x0          0x0  match
+WORK_ENTRY_OFF                              0x8          0x8  match
+WORK_FUNC_OFF                              0x18         0x18  match
+SECCOMP_MODE_OFF                            0x0          0x0  match
+SECCOMP_FILTER_OFF                          0x8          0x8  match
+
+== slab strides (/proc/slabinfo) ==
+   a struct's size is not its slab stride.
+macro                                   derived    committed  verdict
+----------------------------------------------------------------------------
+MM_STRUCT_SZ                              0x400        0x400  match
+MM_ORDER_PAGES                              0x8            -  NEW (absent from target.h)
+
+== pointer-derived (Image) ==
+   static/inlined symbols; kallsyms and BTF cannot see these.
+macro                                   derived    committed  verdict
+----------------------------------------------------------------------------
+ASHMEM_COMPAT_IOCTL_OFF                0xc39660     0xc39660  match
+ASHMEM_MISC_FOPS_OFF                  0x217cb80    0x217cb80  match
+
+== code offsets (Image) ==
+   kprobe oracles and _THIS_IP_; hand-derived offsets rot silently.
+macro                                   derived    committed  verdict
+----------------------------------------------------------------------------
+POSIX_CPU_TIMER_DEL_RACE_OFF              0x128            -  NEW (absent from target.h)
+SLIDE_TRACE_MARK_IP_OFF                0x1f0ac8     0x1f0ac8  match
+
+----------------------------------------------------------------------------
+0 mismatch, 0 unresolved

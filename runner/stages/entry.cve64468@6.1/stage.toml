@@ -1,0 +1,91 @@
+schema = 1
+kind   = "entry"
+id     = "entry.cve64468@6.1"
+cve    = "CVE-2026-64468"
+kmi    = ["android14-6.1"]
+targets = ["panther-CP2A.260705.006"]
+composed = false
+status   = "declared; builds standalone; runner-drivable as a foreign chain; the vulnerable read executes, the reclaim is not observed to land on bare metal; detection hunt, provides nothing"
+
+[build]
+# A static NDK binary with its own main(), driven as a foreign chain — the same
+# invocation shape as cve64560, not GhostLock's dlopen'ed .so.
+form    = "static-exe"
+entry   = "main"
+# racing64468.c is the concurrent race + self-detecting reclaim driver: it checks
+# its own sprayed kmalloc-1k objects for the +108 decrement, so it needs no
+# ftrace and prints its own WIN line. The other harnesses in this directory are a
+# rate model whose oracle is a kernel pr_warn (pump64468), a single-shot detector
+# (race64468), a topology prover (nested64468) and a binderfs setup helper
+# (binderctl); none is a runner-drivable attempt.
+sources = ["cves/cve-2026-64468/racing64468.c"]
+includes = []                   # self-contained: libc + linux/android/binder.h only
+depends  = []
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-64468-racing"
+uses_target_header = false
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/cve64468-racing"
+mode = "755"
+# One device-side command. racing64468 takes [attempts]; 200 per shot bounds a
+# shot while the runner's own loop supplies the retries. Its whole marker stream
+# is stdout, so the redirect is what puts it in $DEV_LOG for archive_shot.
+#
+# It opens /dev/binderfs/ksu64468, created by the [[setup]] step below. Absent
+# it, racing64468 exits 1 on the open and the shot is REFUSED.
+command = "cd @DEV_TMP@; @DEV_ENTRY@ 200 > @DEV_LOG@ 2>&1"
+# No KASLR base is involved: this is a reclaim-detection hunt, not an addressed
+# write, so nothing is replayed into it.
+accepts_base = false
+
+[markers]
+# The win: racing64468.c:225 prints this when the +108 decrement lands in one of
+# its own sprayed objects — the UAF write reclaimed by our controlled memory.
+pass = 'WIN detected \([0-9]+ touched objects\)'
+# No gate/restore/heartbeat vocabulary: the driver crafts a benign object
+# (+584=0) so a landed write never panics, and holds no kernel state open. The
+# generic defaults in runner/lib/exploit.sh stay inert for this stage.
+gate_fail    = 'CVE64468_NO_SUCH_GATE'
+restore_pass = 'CVE64468_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'CVE64468_NO_SUCH_RESTORE_BAD'
+heartbeat    = 'CVE64468_NO_SUCH_HEARTBEAT seq=[0-9]+'
+# On a MISS, the summary line says how far the shot got.
+diag       = '(done: attempts_built=[0-9]+ wins=[0-9]+|a[0-9]+: WIN detected).*'
+diag_count = 'attempts_built=[0-9]+'
+
+# Exit status -> outcome:
+#   0   the run completed (built its chains); wins is in the log, not the status
+#   1   die() — /dev/binderfs/ksu64468 not present, or a binder ioctl failed
+# A completed run is a MISS unless the pass marker fired; a die() is a refusal,
+# almost always the missing private device, which settle-and-retry cannot fix but
+# whose archived log names the cause so REFUSED_MAX ends the run with it in view.
+[exit_map]
+"0" = "MISS"
+"1" = "REFUSED"
+
+# This stage reaches a research milestone (a detected UAF write), not a
+# capability the chain can hand on. It provides nothing; there is no CAP_SU
+# handoff, so the runner drives it as a hunt.
+[provides]
+caps  = []
+field = ''
+label = ""
+
+# Setup, run before each shot. binder-control is 0600 root and CONFIG_USER_NS is
+# off, so an unprivileged shell cannot make its own binder device; a private one
+# is created once per boot, as root, by the entry binary's own `setup`
+# subcommand (BINDER_CTL_ADD). This step
+# needs root and does NOT reboot -- the device is non-persistent, so the run must
+# hold the boot that created it. Root comes from a prior baseline root on the
+# same boot; with none, the runner stops and says so.
+[[setup]]
+command = "@DEV_ENTRY@ setup"
+needs_root = true
+once_per_boot = true
+description = "create the private binderfs device /dev/binderfs/ksu64468"
