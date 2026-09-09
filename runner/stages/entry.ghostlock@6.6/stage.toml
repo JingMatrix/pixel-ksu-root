@@ -1,0 +1,156 @@
+# entry.ghostlock@6.6 — GhostLock entry, android15-6.6 variant.
+#
+#   android15-6.6 targets (mustang/rango/blazer/frankel) compile the baseline
+#   under cves/cve-2026-43499-ghostlock/ (pselect main route, pre61
+#   kernelsnitch).  This set is frozen: any 6.1 change goes under the 61/
+#   subdirectory, so the 6.6 binary stays on the
+#   tested baseline.
+#
+# `facts.forbids` below makes a 6.1 target header a build error against this
+# stage (ARCH-G3-FACTS in runner/scripts/resolve-recipe.py).
+
+schema = 1
+kind   = "entry"
+id     = "entry.ghostlock@6.6"
+cve    = "CVE-2026-43499"
+kmi    = ["android15-6.6"]
+
+# Composed and hardware-verified: driven end to end by ./pixel-ksu-root.
+composed = true
+status   = "composed; hardware-verified; source set frozen 2026-08-10"
+
+[build]
+form    = "preload-so"          # dlopen'ed by cve-helper --run-payload
+entry   = "constructor"         # preload.c ctor -> run_exploit()
+# Order is load-bearing: it fixes STT_FILE order and .rodata string-merge
+# order, and therefore the output bytes.  Do not sort this list.
+sources = [
+  "cves/cve-2026-43499-ghostlock/main.c",
+  "cves/cve-2026-43499-ghostlock/util.c",
+  "cves/kaslr/slide_tracefs.c",
+  "cves/cve-2026-43499-ghostlock/fops.c",
+  "cves/cve-2026-43499-ghostlock/pipe.c",
+  "cves/cve-2026-43499-ghostlock/root.c",
+  "cves/cve-2026-43499-ghostlock/preload.c",
+]
+# -I order is load-bearing too: a quoted #include resolves against the
+# INCLUDING FILE's directory first, so each TU in cves/cve-2026-43499-ghostlock/
+# picks up that directory's common.h.  See the note in entry.ghostlock@6.1.
+includes = ["cves/cve-2026-43499-ghostlock", "cves"]
+depends  = ["cves/cve-2026-43499-ghostlock/common.h", "cves/cve-2026-43499-ghostlock/kernelsnitch/*.h"]
+defines  = ["APP_PAYLOAD=1"]
+# @OPT@ is substituted with `opt` below.  The app and release variants share one
+# flag list.
+cflags   = ["-fPIC", "@OPT@", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-sign-compare"]
+opt      = ["-O2", "-g0"]
+ldflags  = ["-shared", "-pthread", "-Wl,--no-undefined"]
+output   = "cve-2026-43499-app"
+
+# The artifact runner/scripts/build-payloads.sh actually ships.
+[build.release]
+opt     = ["-Oz", "-g0", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
+           "-ffunction-sections", "-fdata-sections"]
+ldflags = ["-shared", "-pthread", "-Wl,--gc-sections", "-Wl,--icf=all", "-s", "-Wl,--no-undefined"]
+output  = "cve-2026-43499-app.release"
+
+[facts]
+header = "cves/targets/{target}/target.h"
+# Consumed by this source set; absence is a build error, not a link error.
+requires = [
+  "OFFSET_H", "BUILD_VARIANT_LABEL", "BUILD_FINGERPRINT",
+  "INIT_TASK", "INIT_TASK_OFF",
+  "ASHMEM_MISC_FOPS", "ASHMEM_MISC_FOPS_OFF", "ASHMEM_FOPS", "ASHMEM_IOCTL",
+  "KMALLOC_CACHES", "KMALLOC_CACHES_OFF",
+  "P0_PAGE_OFFSET", "P0_PHYS_OFFSET", "P0_KERNEL_PHYS_LOAD", "KIMAGE_TEXT_BASE",
+  "PIPE_BUFFER_SIZE", "PIPE_BUFFER_SLOTS",
+  "SLIDE_INIT_TASK_IMAGE", "SLIDE_LOGGERS_0_1_IMAGE", "SLIDE_SYSCTL_BOOTID_IMAGE",
+  "TASK_CRED_OFF", "TASK_REAL_CRED_OFF", "CRED_UID_OFF",
+  "SELINUX_ENFORCING", "SECURITY_HOOK_HEADS",
+]
+# The 6.6 source set defines MM_STRUCT_SZ, KMALLOC_CGROUP_TYPE, KMALLOC_PIPE_INDEX
+# and KMALLOC_CACHE_TYPES unguarded in its own common.h (:51,84,85,86) and knows
+# nothing of PSELECT_WAITER_WORD_SHIFT / the vehicle facts, so forbidding all seven here
+# rejects a 6.1 header.
+forbids = [
+  "MM_STRUCT_SZ", "KMALLOC_CGROUP_TYPE", "KMALLOC_CACHE_TYPES",
+  "KMALLOC_PIPE_INDEX", "PSELECT_WAITER_WORD_SHIFT",
+  "RECLAIM_VEHICLE_DEFAULT",
+]
+
+# panic_risk is indexed by (stage, request phase).
+[properties]
+retry_safe  = true
+# post_slide is "low", not "none": this stage can panic the phone after the run
+# has finished. misc_open() COPIES ashmem_miscs[0].fops into every struct file
+# opened while it is forged, and the page behind that pointer dies with the
+# payload process, so each such file carries a stale f_op that faults on its
+# next touch. Bounding the window is the mitigation -- the restore runs before
+# install_child_root, and the route-page-N and fops-restored step markers
+# measure what is left. Signatures and the outstanding fix:
+# cves/cve-2026-43499-ghostlock/README.md, "Collateral".
+panic_risk  = { pre_slide = "high", post_slide = "low" }
+destructive = ["slide_logger_parent_slot", "ashmem_miscs[0].fops"]
+# restore_fops_ptr_and_owner puts the slot back and zeroes the fake owner word
+# so fops_put() survives. It does not reach struct files already holding the
+# fake pointer; that damage outlives the run and this stage cannot undo it.
+restores    = ["repair_logger_slot", "restore_fops_ptr_and_owner"]
+provides    = ["CAP_SLIDE", "CAP_KRW_C"]
+requires_caps = []
+retains     = ["CAP_KRW_C"]   # the bridge must stay open for fast R/W
+
+# ---------------------------------------------------------------------------
+# The runner contract — runner/README.md, "Foreign-chain contract"
+# ---------------------------------------------------------------------------
+# The four tables below restate runner/lib/exploit.sh's built-in defaults as
+# data.  ./pixel-ksu-root with no --recipe reads no manifest; `--recipe
+# ghostlock` reads this block.
+
+[invoke]
+# A .so dlopen'ed by `cve-helper --run-payload`
+# (cves/cve-2026-43499-ghostlock/su_daemon.c:975-1026, dispatched at :1028).
+kind = "helper-preload"
+
+# The payload the runner pushes is a prebuilt .so chosen out of
+# artifacts/exploits/ by runner/lib/select.sh from data/targets.json — a device
+# can resolve to a payload built for a different codename on the same kernel.
+artifact_source = "runner"
+dest = "/data/local/tmp/exploit-payload.so"
+mode = "755"
+
+# Generated from the _INVOKE_TMPL_DEFAULT literal in runner/lib/exploit.sh.
+command = "cd @DEV_TMP@; @KASLR_ENV@RMG_CLIENT_UID=@CLIENT_UID@ RMG_APP_UID=@APP_UID@        @DEV_HELPER@ --run-payload @DEV_PAYLOAD@ @DEV_HELPER@ @DEV_LOG@ >/dev/null 2>&1"
+
+# A base cached for the current boot is replayed through @KASLR_ENV@
+# (cves/cve-2026-43499-ghostlock/main.c:191-197).
+accepts_base = true
+
+# The default MARK_* set of runner/lib/exploit.sh, as data.  The live classes for
+# GhostLock are PANIC, REFUSED, PASS, MISS and PARKED; the classifier is driven
+# by these patterns.
+[markers]
+pass         = 'slide-kaslr-tracefs-ok pid=[0-9]+ base=[0-9a-f]+'
+gate_fail    = '[A-Z][A-Z0-9_]*_GATE_FAIL'
+restore_pass = '[A-Z][A-Z0-9_]*_RESTORE_PASS'
+restore_bad  = '[A-Z][A-Z0-9_]*_(RESTORE_NOT_PROVEN|RESTORE_UNREACHABLE|RESTORE_FAIL)'
+# Declared so the kill gate stays correct.  Absent, a deadline parks.
+heartbeat    = '[A-Z][A-Z0-9_]*_HEARTBEAT[[:space:]]+seq=[0-9]+'
+# The route summary discriminates "reached root" from "did not"; the count is
+# cfi-miss LINES, one per page that took a miss.
+diag         = '(tcp|pselect) route done=[0-9]+.*'
+diag_count   = 'cfi misses=[0-9]+'
+
+# Empty: cve-helper's early bails return `errno ? errno : <fixed>`
+# (cves/cve-2026-43499-ghostlock/su_daemon.c:1000-1010), so no exit status of
+# this loader carries an outcome.
+[exit_map]
+
+# The KASLR base, from the `pass` marker above.
+[provides]
+caps  = ["CAP_SLIDE", "CAP_KRW_C"]
+field = 'base=[0-9a-f]+'
+label = "base"
+
+# Setup, run before each shot. GhostLock's reclaim race is far easier on a
+# freshly booted device, so its one setup step is a reboot to a clean boot.
+[[setup]]
+reboot = true

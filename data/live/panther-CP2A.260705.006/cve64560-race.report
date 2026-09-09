@@ -1,0 +1,66 @@
+CVE-2026-64560 — reachability measured on a live device
+=======================================================
+device      panther  google/panther/panther:17/CP2A.260705.006/15641320:user/release-keys
+kernel      6.1.157-android14-11-gbd23337e42e7-ab14791245  (GS201 PANTHER MP)
+captured    2026-08-31, uptime 2d10h, KernelSU loaded (u:r:ksu:s0), panic_on_warn=0
+_text       0xffffffdbc3a00000        posix_cpu_timer_del  0xffffffdbc3b951f4 (+0x1951f4)
+ground truth for the disassembly: boot_b (slot _b, /dev/block/sda20, 64 MiB, boot hdr v4)
+            kernel_size 0xfd6670, LZ4-legacy -> Image 35633664 B (see posix_cpu_timer_del.disasm)
+
+VERDICT: VULNERABLE. The exploitable state (armed timer freed while still linked in the
+process timerqueue) was reached on this build, and the kernel said so itself.
+
+1. Vulnerable branch located and verified against this build's own code
+--------------------------------------------------------------------
+  +0x040  bl   cpu_timer_task_rcu
+  +0x044  cbz  x0, +0x0ec              ; p == NULL -> out
+  +0x054  bl   __lock_task_sighand
+  +0x058  cbz  x0, +0x128              ; <== sighand == NULL: the race branch
+  +0x128  ldr  x8, [x19, #152]         ; ctmr->head          (k_itimer.it=0x78 + cpu_timer.head=0x20)
+  +0x12c  cbz  x8, +0x138
+  +0x130  brk  #0x800                  ; WARN_ON_ONCE -> posix-cpu-timers.c:495
+  +0x134  b    +0x0ec                  ; out, timer NOT dequeued
+  +0x138  ldr  x8, [x21]               ; x21 = &ctmr->node   (RB_EMPTY_NODE check)
+  +0x13c  cmp  x8, x21
+  +0x140  b.eq +0x0ec                  ; not queued -> clean
+  +0x144  b    +0x130
+BTF corroboration (data/live/.../btf-vmlinux):
+  k_itimer.it = 0x78 (size 0x108/264)   cpu_timer.node = 0x00, .head = 0x20  -> head at +152  OK
+  signal_struct.posix_cputimers = 0x120
+
+2. Measured on device (kprobes; exploit/cve64560/trigger, 8-core, exec cpu7, del cpu2-6)
+---------------------------------------------------------------------------------------
+  probe                     what it means                                 count
+  pcd_armed  +0x084         delete found timer queued (normal path)      184799 / 15 s
+  pcd_null   +0x128         sighand == NULL observed (race window won)   16 / 40 s + 7 / 15 s
+  pcd_null2  +0x128 w/args  same, with ctmr->head fetched                 9 / 40 s
+  pcd_queued +0x144         head==NULL but node queued                        0   (wrong probe, see below)
+  Rounds: 62/s. Race window: ~0.4 wins/s, ~1 in 3e4 deletes.
+  All 9 arg-captured hits had head != 0, e.g.
+    head=0xffffff881be05258 itclock=0xfffc8eba itid=0x2852   (itclock & 7 == 2 == CPUCLOCK_SCHED,
+    upper bits = ~victim_pid -> a process-wide CPU clock on ANOTHER process, as intended)
+
+3. Kernel-side proof
+--------------------
+  [209036.145760] ------------[ cut here ]------------
+  [209036.145800] WARNING: CPU: 4 PID: 17823 at kernel/time/posix-cpu-timers.c:495 posix_cpu_timer_del+0x130/0x150
+  [209036.147288] CPU: 4 PID: 17823 Comm: cve64560-trigge ... 6.1.157-android14-11-gbd23337e42e7-ab14791245 #1
+  [209036.147339] pc : posix_cpu_timer_del+0x130/0x150     lr : posix_cpu_timer_del+0x58/0x150
+  [209036.147516] x21: ffffff8866c78180  x19: ffffff8866c78108      ; x21 == x19+0x78 == &ctmr->node
+  [209036.147586] x8 : ffffff88fd5aed58                             ; ctmr->head != NULL == still queued
+  [209036.147648] Call trace: posix_cpu_timer_del+0x130/0x150 <- __arm64_sys_timer_delete+0x6c/0x1bc
+  posix-cpu-timers.c:495 is WARN_ON_ONCE(ctmr->head || timerqueue_node_queued(&ctmr->node)).
+  It fired on the FIRST trigger run. Device did not crash; no pstore entry was produced.
+
+4. Consequences for a port
+--------------------------
+  * The freed object comes from a DEDICATED cache, not kmalloc:
+      /proc/slabinfo: posix_timers_cache  903/1023 objs, objsize 264, 31/slab, 2 pages/slab, 33 slabs
+      kernel/time/posix-timers.c:276  SLAB_PANIC | SLAB_ACCOUNT
+      release_posix_timer() -> call_rcu(k_itimer_rcu_free) -> kmem_cache_free(posix_timers_cache)
+    So reclaim is either same-type (another k_itimer, partial control) or a cross-cache
+    attack (drain a slab -> page back to buddy). This is NOT a kmalloc-256/512 spray.
+  * The dangling node lives in victim->signal->posix_cputimers.bases[SCHED].tqhead and is
+    walked on the victim's group exit (cleanup_timers) and on every expiry check.
+  * +0x144 is NOT a useful oracle: head is always non-NULL first, so +0x12c never falls
+    through. Use +0x128 with head=+152(%x19), or just the WARN.

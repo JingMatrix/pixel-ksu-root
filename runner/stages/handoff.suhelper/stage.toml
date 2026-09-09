@@ -1,0 +1,41 @@
+# handoff.suhelper — the su daemon / root helper binary.
+#
+# Target-independent: cves/cve-2026-43499-ghostlock/su_daemon.c references no
+# target.h macro, so all 19
+# targets produce one cve-2026-43499-root.
+#
+# The output name carries CVE-2026-43499; the helper itself is CVE-independent.
+
+schema = 1
+kind   = "handoff"
+id     = "handoff.suhelper"
+kmi    = ["android14-6.1", "android15-6.6"]
+
+composed = true
+status   = "composed; hardware-verified"
+
+[build]
+form     = "static-pie"
+entry    = "main"
+sources  = ["cves/cve-2026-43499-ghostlock/su_daemon.c"]
+includes = []
+depends  = []
+defines  = []
+cflags   = ["-fPIE", "-pie", "@OPT@", "-Wall", "-Wextra"]
+opt      = ["-O2", "-g0"]
+ldflags  = ["-ldl"]
+output   = "cve-2026-43499-root"
+uses_target_header = false
+
+[facts]
+requires = []
+forbids  = []
+
+[properties]
+retry_safe    = true
+panic_risk    = { pre_slide = "none", post_slide = "none" }
+destructive   = []
+restores      = []
+provides      = ["CAP_SU"]
+requires_caps = []
+retains       = []

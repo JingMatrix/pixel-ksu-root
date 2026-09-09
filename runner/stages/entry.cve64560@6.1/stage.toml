@@ -1,0 +1,205 @@
+# entry.cve64560@6.1 — CVE-2026-64560 posix-cpu-timer entry.
+#
+# Built through the same recipe path as GhostLock (`make TARGET=...
+# RECIPE=cve64560`) and driven by `./pixel-ksu-root --recipe cve64560` as a
+# foreign chain: an opaque process behind a declared {invoke, markers, exit-code
+# map, provides} contract.
+#
+#   * it carries its own main() (exploit-panther.c:5141), not a constructor, so
+#     the runner drives it as a whole PROCESS through one command line; it
+#     cannot call into it, sequence it, or retry any part of it separately;
+#   * it carries its own groom, bridge, RW and effect inline, so none of the
+#     stage kinds the runner knows (groom, entry, bridge, rw, effect, handoff)
+#     are separable from it;
+#   * it carries a SECOND, independent profile mechanism alongside this recipe
+#     machinery: detect_standalone_profile() (:4852) and configure_standalone()
+#     (:4878) fingerprint-match frankel/panther/blazer at RUNTIME from
+#     ro.build.fingerprint + ro.product.device + /proc/cmdline and set ~22
+#     tunables from the environment.
+#
+# Composing it means splitting it into entry.cve64560_cputimer +
+# bridge.misclist_uhid + groom.crosscache_timer; `composed = false` below
+# carries that claim.
+
+schema = 1
+kind   = "entry"
+id     = "entry.cve64560@6.1"
+cve    = "CVE-2026-64560"
+kmi    = ["android14-6.1"]
+
+# Only one target header exists; the recipe restricts to it.  Bare key, so it
+# precedes the first [table] header.
+targets = ["panther-CP2A.260705.006"]
+
+composed = false
+# STAGE0 lands reliably and the bridge write to &ashmem_miscs[0].fops lands.
+# The bridge fd has NEVER validated and root through this CVE has NEVER been
+# achieved -- see cves/cve-2026-64560/README.md.
+status   = "declared; builds standalone; runner-drivable as a foreign chain; STAGE0 lands, bridge fd never validated, never rooted; parks by design"
+
+[build]
+form    = "static-exe"          # vs GhostLock's preload-so
+entry   = "main"
+sources = ["cves/cve-2026-64560/exploit-panther.c"]
+includes = []                   # self-contained: 138 inline #defines, no project headers
+depends  = []
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-64560-exploit"
+# The .c does not #include the generated header, so the build passes no
+# -DTARGET_CONFIG_H.
+uses_target_header = false
+
+[facts]
+header    = "cves/targets/{target}/cve64560.h"
+generator = "runner/scripts/gen-cve64560-offsets.py"
+# Generated (62 defines).  Its reader is runner/scripts/harvest-live.sh:220,
+# which passes it to runner/scripts/lib/offset_report.py as TH_EXTRA for
+# verification.  23 of the 62 also appear as inline #defines in the .c and all
+# 23 agree byte-for-byte; 39 are header-only and the .c hardcodes equivalents
+# under different names (DP_TASK_CRED_OFF, FAKE_CPU_TIMER_*,
+# BLAZER_/FRANKEL_DIRECT_BOOTID_PARENT).
+requires = [
+  "LINK_INIT_TASK", "LINK_INIT_CRED", "LINK_SELINUX_STATE",
+  "LINK_KMALLOC_CACHES", "LINK_ANON_PIPE_BUF_OPS",
+  "LINK_ASHMEM_IOCTL", "LINK_ASHMEM_OPEN", "LINK_ASHMEM_RELEASE",
+  "LINK_MEMSTART_ADDR", "LINK_KIMAGE_VOFFSET", "LINK_MODULE_DIRECT_BASE",
+  "LINK_MISC_LIST", "LINK_UHID_MISC", "LINK_UHID_FOPS",
+  "LINK_SYSCTL_BOOTID", "LINK_CYCLE_C", "LINK_CYCLE_D",
+  "LINK_SDATA", "LINK_END", "LINK_IMAGE_BASE",
+]
+forbids  = []
+
+[properties]
+retry_safe  = true
+panic_risk  = { pre_slide = "med", post_slide = "none" }
+destructive = ["sysctl boot_id .data", "init_task.thread_node (collateral)"]
+restores    = ["restore_misc_list", "confirm_stage0_cycle", "restore_stage0_state"]
+# Capabilities this stage would provide once composed.
+provides      = ["CAP_SLIDE", "CAP_KRW_C"]
+requires_caps = ["groom.crosscache_timer"]
+retains       = ["CAP_KRW_C"]
+
+[invoke]
+# 64560 is a static NDK binary while GhostLock is a dlopen'ed .so driven by
+# cve-helper --run-payload (cves/cve-2026-43499-ghostlock/su_daemon.c:1028).
+# Two invocation shapes, one manifest field.  This is the other shape.
+kind = "device-exec"
+
+# The file the runner pushes.  "build" means cves/build/<target>/<output> —
+# the artifact `make TARGET=<t> RECIPE=cve64560` produces, resolved from
+# [build].output above, so the binary that is RUN is by construction the binary
+# that was BUILT for that target.  (GhostLock says "runner": its runtime payload
+# is a prebuilt .so picked out of artifacts/ by runner/lib/select.sh, not a build
+# output.)
+artifact_source = "build"
+dest = "/data/local/tmp/cve64560-entry"
+mode = "755"
+
+# One device-side command line.  @NAME@ placeholders are substituted by
+# runner/lib/exploit.sh:render_invoke(); the resolver rejects any placeholder this
+# invocation shape cannot fill, so a typo fails the run instead of delivering a
+# broken command to a phone.
+#
+# The binary writes its whole marker stream to stdout/stderr (setvbuf _IONBF at
+# :5211), so the redirect is what puts it in $DEV_LOG for archive_shot to pull.
+# The exec children re-enter through /proc/self/exe (:788, :842), not argv[0].
+command = "cd @DEV_TMP@; @DEV_ENTRY@ > @DEV_LOG@ 2>&1"
+
+# No base can be replayed into this entry.  It derives its own slide in-process
+# and reads no KASLR_BASE from the environment, so every shot re-derives it.
+accepts_base = false
+
+# The marker set, taken from real panther logs, mapped onto the runner's outcome
+# vocabulary.  These fill runner/lib/exploit.sh's overridable MARK_* EREs.
+#
+# Markers this stage emits that are not classified:
+#   ATTEMPT_BEGIN / LANE_DONE / RCU_FORCE      progress only
+#   ASHMEM_GATE_PASS                           precondition met
+#   ASHMEM_GATE_FAIL                           precondition NOT met — but a
+#     transient one, so it is routed through exit 3 -> REFUSED below rather than
+#     through gate_fail -> PRECONDITION_FAIL, which would abort the run
+#   MISC_BRIDGE_STAGE_BEGIN                    the bridge stage starting
+#   ORDER1_RECLAIM_GATE changed_nodes=N        diagnostic
+#     (cves/cve-2026-64560/README.md).
+[markers]
+# The win, and the thing this stage provides.  Printed at :5292.
+pass = 'STAGE0_GATE_PASS slide=0x[0-9a-f]+ kernel_base=0x[0-9a-f]+'
+
+# PRECONDITION_FAIL aborts the run, so this names exactly one marker.  The
+# generic `[A-Z][A-Z0-9_]*_GATE_FAIL` default catches the per-attempt losses
+# (ORDER1_RECLAIM_GATE_FAIL, PIPE_CACHE_GATE_FAIL, RACE_CPU_PIN_GATE_FAIL,
+# *_RESTORE_GATE_FAIL) and the transient preflight gates (ASHMEM_GATE_FAIL
+# base=/dev/ashmem errno=13), which belong in the settle-and-retry class (see
+# exit_map).
+#
+# TARGET_PROFILE_GATE_FAIL is permanent: detect_standalone_profile() (:4852) did
+# not recognise ro.build.fingerprint, so this binary is for another device.
+gate_fail = 'TARGET_PROFILE_GATE_FAIL'
+
+# The restore ledger.  ASHMEM_FOPS_RESTORE_PASS (:1706),
+# STAGE0_CYCLE_RESTORE_PASS (:1743), STAGE0_BOOTID_RESTORE_PASS (:1793) and
+# KERNEL_STATE_RESTORE_PASS (:5430) discharge the debt; MISC_BRIDGE_RESTORE_FAIL
+# (:5359) and KERNEL_STATE_RESTORE_NOT_PROVEN (:5418, :5427) leave it standing,
+# which makes the boot DIRTY and forces a reboot before any further shot.
+restore_pass = '[A-Z][A-Z0-9_]*_RESTORE_PASS'
+restore_bad  = '[A-Z][A-Z0-9_]*_(RESTORE_NOT_PROVEN|RESTORE_UNREACHABLE|RESTORE_FAIL)'
+
+# This stage parks by design and emits no heartbeat: hold_cred_unknown() (:1858)
+# is a bare `yield` loop after announce_hold_policy() prints
+# "DO NOT KILL THIS PROCESS. /dev/ashmem is hooked system-wide".  With no
+# heartbeat in the log the runner parks the shot and reboots deliberately
+# instead of SIGKILLing a process whose death would free the forged fops page
+# under a live kernel hook.
+heartbeat = '[A-Z][A-Z0-9_]*_HEARTBEAT[[:space:]]+seq=[0-9]+'
+
+# What to print on a MISS instead of the last log line.  These are the lines
+# that actually say how far the shot got.
+diag = '(BOOTID_WRITE_MISS|STAGE0_MISS_CLEAN|STAGE0_MISS_NOT_PROVEN|MISC_BRIDGE_MISS_CLEAN|MISC_BRIDGE_MISS_NOT_PROVEN|MISC_BRIDGE_LATE_HIT|MISC_BRIDGE_MISS_PRESERVE).*'
+# 64560 has no per-page counter; an empty pattern disables the annotation.
+diag_count = ''
+
+# Exit status -> outcome, a single-writer map read off main():
+#
+#   0   status 0 after KERNEL_STATE_RESTORE_PASS (:5430)   never observed
+#   1   BOOTID_WRITE_MISS attempts=N (:5289)               stage0 budget spent
+#   2   TARGET_CPU_GATE_FAIL online<8 (:5177) or the race-cpu affinity gate
+#       (:5181).  Also TARGET_PROFILE_GATE_FAIL, which the marker above catches
+#       first.
+#   3   UHID_GATE_FAIL (:5229) / ASHMEM_GATE_FAIL (:5241) / boot_id baseline
+#   4   posix_timers_cache baseline unreadable (:5267)
+#   6   MISC_BRIDGE_RW_FAIL   9  PIPE_RECLAIM_FAIL
+#   10  PHYS_PROBE_FAIL      11  STAGE8_ROOT_FAIL
+#   102 argv shape rejected at :5163 — only reachable if the invoke template
+#       above is malformed, i.e. the shot never really started.
+#
+# 2/3/4 are preflight bails: the binary returns before ATTEMPT_BEGIN, so no race
+# ran and no attempt is charged.  REFUSED settles and retries, rebooting only on
+# a second refusal on the same boot, which is the right response to a device node
+# that answered EACCES.  REFUSED_MAX bounds it at 8.
+#
+# The runner reads the status from `adb shell`, which forwards a remote exit
+# status only under the v2 shell protocol; an older adb or a device without it
+# returns 0 or 255 regardless.  The map is consulted only where the shot would
+# otherwise be scored a bare MISS.  A `-> MISS rc=255` line means the status did
+# not survive the transport.
+[exit_map]
+"0"   = "PASS"
+"1"   = "MISS"
+"2"   = "REFUSED"
+"3"   = "REFUSED"
+"4"   = "REFUSED"
+"6"   = "MISS"
+"9"   = "MISS"
+"10"  = "MISS"
+"11"  = "MISS"
+"102" = "REFUSED"
+
+# The value extracted from the `pass` marker above.  Only CAP_SLIDE has been
+# observed on hardware.
+[provides]
+caps  = ["CAP_SLIDE"]
+field = 'kernel_base=0x[0-9a-f]+'
+label = "kernel_base"
