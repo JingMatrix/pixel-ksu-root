@@ -84,7 +84,7 @@ which is the line the runner's pass marker matches
 ## Cost
 
 30–66 ms ([`exploit.sh#L16`](../../runner/lib/exploit.sh#L16),
-[`exploit.sh#L1082`](../../runner/lib/exploit.sh#L1082)), with no kernel primitive,
+[`exploit.sh#L1093`](../../runner/lib/exploit.sh#L1093)), with no kernel primitive,
 no fork and no reclaimed page: it cannot panic.
 
 The leak is unconditional in both entries — 6.6 at
@@ -114,8 +114,11 @@ Panther's is
 [`target.h#L134`](../targets/panther-CP2A.260705.006/target.h#L134), with the
 derivation in the comment above it
 ([`target.h#L129`](../targets/panther-CP2A.260705.006/target.h#L129)):
-`tracing_mark_write@0x1f0964 + 0x164 = 0x1f0ac8`, harvested from that build's
-kallsyms.
+`tracing_mark_write@0x1f0964 + 0x164 = 0x1f0ac8`. That value is re-derived from a
+live capture (regenerated via
+[`harvest-live.sh`](../../runner/scripts/harvest-live.sh)) and recorded at
+`match` in the tracked
+[`offsets.report`](../../data/live/panther-CP2A.260705.006/offsets.report).
 
 The definition and the declaration are both inside
 `#ifdef SLIDE_TRACE_MARK_IP_OFF`
@@ -156,10 +159,11 @@ build has been rooted, via
 [`tools/pixel-image`](../../tools/pixel-image/README.md): it looks the OTA URL
 up, partial-fetches it, unpacks the boot image to a raw arm64 `Image`, and
 derives this row along with every other. It reproduces `0x1f0ac8` on panther and
-`0x1f4c8c` on blazer, each matching the value harvested from that build's
-kallsyms — and because the same row now runs inside
-[`harvest-live.sh`](../../runner/scripts/harvest-live.sh), the constant every
-root run depends on is checked on every harvest instead of never.
+`0x1f4c8c` on blazer, each matching the committed header value — which
+[`harvest-live.sh`](../../runner/scripts/harvest-live.sh) independently re-derives
+from a live capture and records at `match` in the tracked
+[`offsets.report`](../../data/live/panther-CP2A.260705.006/offsets.report), so the
+constant every root run depends on is checked on every harvest instead of never.
 
 ## Checking it on a device
 

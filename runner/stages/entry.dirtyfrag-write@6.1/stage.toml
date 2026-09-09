@@ -1,0 +1,266 @@
+# entry.dirtyfrag-write@6.1 — CVE-2026-43284 "DirtyFrag", the write-primitive proof.
+#
+# Same source and same build output as entry.dirtyfrag@6.1; the difference is two
+# flags. Where the probe entry measures which half of the primitive is reachable
+# from the shell domain and writes nothing, this one skips that question, assumes
+# CAP_NET_ADMIN, and asks the other one: does the 4-byte store land in the page
+# cache of a read-only file on this kernel at all?
+#
+# One source, one output, two stages is the tree's existing shape, not a new one:
+# entry.badepoll@6.1, entry.badepoll-leak@6.1 and entry.badepoll-esc@6.1 all
+# compile cves/cve-2026-46242-badepoll/oracle46242.c to the single output
+# cve-2026-46242-oracle and differ only in their [invoke] command. The gate that
+# would object to two stages claiming one artifact, ARCH-G8-WRITER
+# (runner/scripts/resolve-recipe.py:764), compares only the stages ONE recipe
+# selects, and a recipe selects exactly one entry — so the sharing is legal by
+# construction and each of the two dirtyfrag recipes builds the same binary.
+#
+# WHY needs_root = true, and what it does NOT mean.
+#
+# The trigger half of this bug is installing an XFRM state with an attacker-named
+# XFRMA_REPLAY_ESN_VAL.seq_hi, which is the value the store writes. From the
+# shell domain that is unreachable, twice over, and the probe entry measured both:
+#
+#   * socket(AF_NETLINK, SOCK_RAW, NETLINK_XFRM) returns EACCES — the shell
+#     domain has no netlink_xfrm_socket access in sepolicy;
+#   * CapBnd = 0x00000000008000c0 (CAP_SETGID | CAP_SETUID | CAP_SYSLOG).
+#     CAP_NET_ADMIN is bit 12: it is not merely unheld, it is not in the BOUNDING
+#     set, so no exec and no file capability can ever hand it to this domain. And
+#     the public exploit's way around that, a user namespace, does not exist here
+#     either — CONFIG_USER_NS is off (unshare(CLONE_NEWUSER) = EINVAL, no 'user'
+#     entry in /proc/self/ns) and unshare(CLONE_NEWNET) is EPERM.
+#
+# Those are permanent properties of the domain. This stage does not cross that
+# wall, it bypasses it, by running the binary through an su that is already on
+# the device from a prior baseline root on the same boot (./pixel-ksu-root with
+# the default ghostlock recipe). With no such su, runner/lib/exploit.sh's
+# setup_precheck() (:1093) abandons the run up front and says which command to
+# run first, and a shot that somehow reaches the invoke scores REFUSED (:732).
+#
+# So this is a de-risking MEASUREMENT, not an exploit step. It answers one
+# question the unprivileged probe cannot reach — whether the kernel-side store
+# lands on this tree — and answers it about a kernel that has already been
+# rooted. Crossing the wall for real needs a second bug (the published chain uses
+# CVE-2026-49881 in com.android.server.telecom to run code inside system_server
+# and from there make com.android.networkstack, one of the three domains sepolicy
+# allows netlink_xfrm_socket, do the SA install). That bug is live on this build,
+# but it needs an installed APK, which is a stage kind this framework does not
+# have. Nothing here roots anything, and nothing here has been observed to yield
+# a capability.
+#
+# WHY --method both is the shot's default.
+#
+# The payload half is the second unknown, and the two pinning paths disagree on
+# this tree. The published chain pins with splice(file -> pipe -> socket); on
+# android14-6.1 udp_sendpage() became a sendmsg carrying MSG_SPLICE_PAGES without
+# the backport that HONOURS the flag — skb_splice_from_iter() does not exist in
+# this tree, __ip_append_data() has no MSG_SPLICE_PAGES arm, and ip_append_page()
+# (the path that pins and sets SKBFL_SHARED_FRAG) survives with zero callers.
+# Confirmed against the harvested kallsyms (runner/scripts/harvest-live.sh):
+# skb_splice_from_iter ABSENT, udp_sendpage and ip_append_page present. So splice
+# is expected to copy into a
+# throwaway pfrag page, land the store there, and leave the file untouched —
+# silently. The replacement is sendmsg(MSG_ZEROCOPY) over a MAP_SHARED PROT_READ
+# mapping, which reaches __zerocopy_sg_from_iter() -> iov_iter_get_pages2(), both
+# present. --method both (mode_write()) runs splice first and then zerocopy
+# against the same offset of the same scratch file, re-baselining in between —
+# the zc arm re-reads the page before it fires — so the LOG is the record of that
+# difference rather than this comment being a claim about it.
+#
+# What the MSG_ZEROCOPY path measured so far, unprivileged, from the probe:
+# the completion on the error queue comes back ee_origin = SO_EE_ORIGIN_ZEROCOPY
+# with ee_code = SO_EE_CODE_ZEROCOPY_COPIED (zerocopy_pinned() reads exactly that
+# bit off the error queue) for EVERY shape tried — 24+16, 24+4096 and 4096+4096
+# bytes, over lo and over wlan0, TCP as well as UDP — with SO_ZEROCOPY reading
+# back as 1. Larger sends (65000 bytes) fail ENOBUFS, which is
+# mm_account_pinned_pages() hitting RLIMIT_MEMLOCK, a separate limit. The
+# __ip_append_data() decision on the device disassembles as
+#     ldrb w9, [x9, #232]      ; dev->features low byte, bit 0 = NETIF_F_SG
+#     and  w9, w22, w9         ; w22 = (csummode == CHECKSUM_PARTIAL)
+#     tbz  w9, #0, ...         ; -> uarg->zerocopy = 0
+# so 'copied' means NETIF_F_SG was clear on the route device, or csummode was not
+# CHECKSUM_PARTIAL, OR the uarg was downgraded later by an skb_copy_ubufs() on the
+# way to the receiver. That last case is why this stage exists as more than a
+# formality: a downgrade that happens AFTER esp_input() has run would still leave
+# the 4 bytes written, and the completion notification cannot tell the operator
+# which of the two it was. Reading the scratch file back through a fresh
+# O_RDONLY descriptor can, and that is all --write does. Under root the shot also
+# reports two things the shell domain cannot get at: DF_FEATURES, the route
+# device's NETIF_F_SG / checksum-offload bits read through ethtool, which is half
+# of the __ip_append_data() decision above; and DF_PAGE_IDENTITY, an in-band
+# check that does not trust the notification at all — 64 bytes sent
+# MSG_ZEROCOPY, the buffer overwritten between the send and the receive, so
+# pinned=1 means the receiver saw the LATER bytes and the kernel really held the
+# page, pinned=0 means it saw a copy.
+
+schema = 1
+kind   = "entry"
+id     = "entry.dirtyfrag-write@6.1"
+cve    = "CVE-2026-43284"
+kmi    = ["android14-6.1"]
+composed = false
+status   = "declared; builds standalone; runner-drivable as a foreign chain; needs a prior baseline root on the same boot. Measured under root (--write --method both): the SA installs (rc=0) and esp_input() runs the AEAD on both pinning paths (DF_ESP_REACHED aead_ran=1), so the store executes, but the file is unchanged either way -- it lands on a copy. Not a privilege wall: skb_orphan_frags_rx() in __netif_receive_skb_core() orphans MSG_ZEROCOPY frags unconditionally before ip_rcv(). Provides nothing, and will not on this tree."
+
+[build]
+# A static NDK binary with its own main(), driven as a foreign chain — the same
+# invocation shape as cve64560 and 64468, not GhostLock's dlopen'ed .so.
+form    = "static-exe"
+entry   = "main"
+# The SAME source and the SAME output as entry.dirtyfrag@6.1, which drives the
+# other mode of the same binary; see the header. dirtyfrag.c is one file with
+# both modes, no target header, no offsets and no KASLR base, because the
+# primitive is data-only: the value stored is htonl(replay_esn->seq_hi), which the
+# attacker names in the SA and which is independent of both the crypt and the
+# auth key.
+sources = ["cves/cve-2026-43284-dirtyfrag/dirtyfrag.c"]
+includes = []                   # self-contained: libc + linux/xfrm.h, netlink, errqueue
+depends  = []
+defines  = []
+# No -pthread: the source is single-threaded (one_write() sleeps 200 ms for the
+# receiver's softirq rather than racing anything).
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-43284-dirtyfrag"
+# No offsets and no per-build facts, so no target header — and, unlike
+# entry.cve64560@6.1, no `targets = [...]`: this builds for every android14-6.1
+# target rather than the single build a generated header would pin.
+uses_target_header = false
+
+[properties]
+# Every shot rebuilds its own scratch file from scratch (make_target() opens it
+# O_RDWR|O_CREAT|O_TRUNC) and takes a fresh baseline
+# before each arm, so a shot that changes nothing leaves the device exactly as it
+# found it and a retry measures the same question again.
+retry_safe  = true
+# The datagram is malformed on purpose but is consumed by the kernel's own encap
+# listener on loopback, the SA is deleted on the way out of one_write(),
+# and nothing here frees an object it does not own. Neither
+# arm has produced a panic on hardware, and there is no slide to be on either
+# side of.
+panic_risk  = { pre_slide = "none", post_slide = "none" }
+# One write, to a file the entry itself creates. Named as destructive because it
+# IS the point of the stage: if the primitive works, 4 bytes of a file this
+# process only ever opened O_RDONLY change under it.
+destructive = ["4 bytes of /data/local/tmp/dirtyfrag.target (a scratch file the entry creates)"]
+# Nothing to repair: the scratch file is the entry's own and is truncated and
+# rewritten by the next shot. An empty list is the honest entry, and the resolver
+# reports "declared empty" rather than falling back to GhostLock's defaults
+# (runner/scripts/resolve-recipe.py:110).
+restores    = []
+# The capability this stage WOULD supply once composed: an arbitrary 4-byte
+# overwrite of the page cache of a file the process cannot write. CAP_FILE_W is a
+# NEW name in this tree — no other manifest declares or requires it. That is safe
+# because only CAP_SU is load-bearing to the runner: chain_has_su()
+# (runner/lib/exploit.sh:1033) is the sole reader of the CHAIN_CAPS union, and a
+# name it does not recognise simply never makes the chain claim it can root.
+# [provides].caps below stays empty, because that field is what has been OBSERVED
+# and nothing has been observed.
+provides      = ["CAP_FILE_W"]
+# It cannot install the SA itself; it needs a root already on the boot. That is
+# the same claim needs_root = true makes to the runner, said in the capability
+# vocabulary.
+requires_caps = ["CAP_SU"]
+retains       = []
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+# The same dest as entry.dirtyfrag@6.1: one binary, two modes, and the two
+# recipes are never resolved together.
+dest = "/data/local/tmp/dirtyfrag-entry"
+mode = "755"
+# One device-side command. --write is the mode; --method both runs the published
+# chain's splice path and then the MSG_ZEROCOPY replacement against the same
+# offset, for the reason in the header. Defaults supply the rest: the scratch file
+# /data/local/tmp/dirtyfrag.target, offset 0, value 0xdeadbeef and SPI 0xd17f7a6
+# (dirtyfrag.c main()). stdout is unbuffered (setvbuf _IONBF), so the redirect
+# is what puts the whole marker stream in $DEV_LOG for archive_shot.
+command = "cd @DEV_TMP@; @DEV_ENTRY@ --write --method both > @DEV_LOG@ 2>&1"
+# No KASLR base is involved and none could be used: the primitive is data-only —
+# no address is computed, no symbol is dereferenced — so nothing is replayed in.
+accepts_base = false
+# The crux; the header says why at length. Short version: the shell domain cannot
+# open a NETLINK_XFRM socket (EACCES) and CAP_NET_ADMIN is not in its bounding
+# set, so the SA cannot be installed unprivileged. Root comes from a prior
+# baseline root on the same boot, exactly as entry.cve64468@6.1 gets root to open
+# its private binderfs device; with none, the runner scores the shot REFUSED and
+# setup_precheck() says so before it spends a boot.
+needs_root = true
+
+[markers]
+# The win, and the only thing that counts as one: the 4-byte store landed in the
+# page cache of a file this process never opened for writing, read back through a
+# FRESH O_RDONLY descriptor (printed by mode_write() only when an arm's
+# readback equals the value the SA declared). NEVER observed on hardware.
+pass = 'DF_WRITE_PASS method=(zc|splice) off=0x[0-9a-f]+ val=0x[0-9a-f]{8}'
+# Narrow, as gate_fail must be: it maps to PRECONDITION_FAIL, which aborts the
+# whole run. The single reachable one in --write mode is mode_write()'s
+# page-straddle check: a 4-byte store whose offset would cross a page boundary.
+# A malformed invocation, permanent for that offset, and no amount of settling or
+# rebooting changes it. Every transient bail (scratch file, baseline,
+# re-baseline) exits 3 and is routed to REFUSED through the exit map instead.
+gate_fail = 'DF_WRITE_GATE_FAIL wall=offset_spans_page'
+# The entry repairs nothing and holds no kernel state open — it deletes its SA
+# and closes its sockets on the way out — and a two-send shot is over in under a
+# second, so the restore and heartbeat vocabularies stay inert. These sentinels
+# keep the generic defaults in runner/lib/exploit.sh from matching by accident.
+restore_pass = 'DIRTYFRAG_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'DIRTYFRAG_NO_SUCH_RESTORE_BAD'
+heartbeat    = 'DIRTYFRAG_NO_SUCH_HEARTBEAT seq=[0-9]+'
+# On a MISS, which pinning path was tried and what came back — the SA install and
+# its rc, whether the zerocopy send was told it pinned or copied, and each arm's
+# readback, plus the route device's feature bits (DF_FEATURES) and the in-band
+# pin test (DF_PAGE_IDENTITY). That is the whole content of a losing shot, and it
+# is what distinguishes "the SA never went in" from "it went in and the page was
+# copied" from "it went in, the page was pinned, and the store still did not
+# land".
+diag       = '(DF_SA_ADD spi=.*|DF_ZC_SENT pinned=-?[0-9]+|DF_SPLICE_RESULT changed=.*|DF_ZC_RESULT changed=.*|DF_FEATURES .*|DF_PAGE_IDENTITY .*|DF_ESP_REACHED .*|DF_TRIGGER_MISS .*)'
+# Nothing counts rounds here: a shot is one SA and one datagram per arm, not a
+# race with a round budget, so there is no progress number to report.
+diag_count = ''
+
+# Exit status -> outcome. The binary is a single writer with a fixed set of codes
+# (the EX_* block at the top of dirtyfrag.c), so the map is meaningful; markers
+# still win over it, and it only refines a shot that would otherwise score a bare
+# MISS.
+#   0  EX_PASS     an arm's readback matched — the pass marker fired too
+#   1  EX_MISS     both arms ran and neither changed the file -> a real attempt
+#   2  EX_WALL     the offset straddles a page; also emits gate_fail
+#   3  EX_REFUSED  scratch file / baseline / re-baseline failed; nothing attempted
+#   4  EX_USAGE    argv shape rejected — never started, so REFUSED, not a MISS
+[exit_map]
+"1" = "MISS"
+"2" = "PRECONDITION_FAIL"
+"3" = "REFUSED"
+"4" = "REFUSED"
+
+# Observed: nothing. The store has never landed on hardware, so there is no
+# capability to hand on and no field to report out of the pass marker. This is
+# what keeps a --recipe dirtyfrag-write run on the hunt path of
+# runner/README.md §2.3 — no manager detection, no ksud, nothing late-loaded —
+# even though [properties].provides names CAP_FILE_W as the declared graph.
+[provides]
+caps  = []
+field = ''
+label = ""
+
+# Setup, run before each shot. NOT a reboot, and the omission is the whole point:
+# declaring any [[setup]] opts out of the reboot-per-shot the runner synthesizes
+# for a stage that declares none, and here that default would destroy the
+# precondition rather than improve it. The root this stage runs under is an su
+# left on the device by a baseline root earlier on the same boot; a reboot takes
+# it away and every subsequent shot is REFUSED. entry.cve64468@6.1 gives the same
+# reasoning for its own non-rebooting setup step, where what must survive the shot
+# loop is a non-persistent binderfs device created on this boot.
+#
+# What the step does instead is record, in the shot log, the one fact the archive
+# cannot recover afterwards: whether root actually answered for this shot, and on
+# which kernel. needs_root = true on it so that setup_precheck()
+# (runner/lib/exploit.sh:1104) fails the run up front, with the command to run
+# first, rather than rebooting and shooting uselessly.
+[[setup]]
+command = "echo dirtyfrag-write-setup uid=$(id -u) kernel=$(uname -r) uptime=$(cut -d. -f1 /proc/uptime)s"
+needs_root = true
+once_per_boot = true
+description = "record that a root shell answers on this boot (uid=0) and which kernel it answers on"

@@ -203,3 +203,11 @@ diag_count = ''
 caps  = ["CAP_SLIDE"]
 field = 'kernel_base=0x[0-9a-f]+'
 label = "kernel_base"
+
+# Setup, run before each shot.  This entry carries a non-trivial pre-slide panic
+# risk, parks holding a system-wide /dev/ashmem hook, and leaves a restore ledger
+# a lost shot can leave DIRTY -- so each attempt wants a clean boot.  Its one
+# setup step is a reboot: the same default obtain_root synthesizes when an entry
+# declares none, made explicit here for parity with the other entries.
+[[setup]]
+reboot = true

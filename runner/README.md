@@ -109,7 +109,7 @@ release = ["entry:release"]
 
 [`recipes/cve64560.toml`](recipes/cve64560.toml) is one entry and no non-entry
 stages ([`stages = []`](recipes/cve64560.toml#L33)). That is what makes a
-`--recipe cve64560` run a **hunt** — with no stage providing `CAP_SU` there is no
+`--recipe cve64560` run a *hunt* — with no stage providing `CAP_SU` there is no
 handoff to install, so the runner detects no manager, derives no ksud and
 late-loads nothing ([../pixel-ksu-root](../pixel-ksu-root#L344)). The product of
 a hunt is the classified evidence in `../logs/shots/<run>/index.tsv`.
@@ -231,7 +231,7 @@ flow:
    contract ([../pixel-ksu-root](../pixel-ksu-root#L308)). With no `--recipe` the
    runner reads no manifest and uses the
    [built-in `INVOKE_*` / `MARK_*` defaults in lib/exploit.sh](lib/exploit.sh#L131).
-3. Handoff branch — [`chain_has_su`](lib/exploit.sh#L806) tests whether the
+3. Handoff branch — [`chain_has_su`](lib/exploit.sh#L1033) tests whether the
    selected chain's capability union contains `CAP_SU`. If it does, the runner
    detects the KernelSU manager, derives `ksud`, and early-exits if a module is
    already resident ([../pixel-ksu-root](../pixel-ksu-root#L327)). If not, the
@@ -240,31 +240,31 @@ flow:
    the manager uid, via [`resolve_target()`](lib/select.sh#L16).
 5. Stage the entry — a `device-exec` entry pushes the one static binary
    `make RECIPE=<r>` produced for this exact target
-   ([../pixel-ksu-root](../pixel-ksu-root#L457)); a `helper-preload` entry pushes
+   ([../pixel-ksu-root](../pixel-ksu-root#L463)); a `helper-preload` entry pushes
    `cve-helper` plus the prebuilt `.so` that
    [`resolve_target()`](lib/select.sh#L16) picks from `artifacts/`
-   ([../pixel-ksu-root](../pixel-ksu-root#L469)).
-6. Obtain root — [`obtain_root()`](lib/exploit.sh#L983), below.
+   ([../pixel-ksu-root](../pixel-ksu-root#L475)).
+6. Obtain root — [`obtain_root()`](lib/exploit.sh#L994), below.
 7. Install / verify / teardown — for a root chain,
    [`install_ksu`](lib/install.sh#L62) late-loads the signature-locked
    `kernelsu.ko`, then [`teardown_staging`](lib/install.sh#L184) drops the PATH
    shadow so `su` resolves to KernelSU's `su`, and the driver self-reports
-   ([../pixel-ksu-root](../pixel-ksu-root#L634)).
+   ([../pixel-ksu-root](../pixel-ksu-root#L573)).
 
 ### 4.1 The root loop
 
-[`obtain_root()`](lib/exploit.sh#L983) is one loop. Each shot fires the entry and
+[`obtain_root()`](lib/exploit.sh#L994) is one loop. Each shot fires the entry and
 asks the root oracle; the retries bound the main-route R/W race, which is the
-thing that can reboot the phone ([lib/exploit.sh](lib/exploit.sh#L1019)).
+thing that can reboot the phone ([lib/exploit.sh](lib/exploit.sh#L1030)).
 
 The KASLR base is the one thing carried between shots. It is fixed for the
 lifetime of a boot, so the first iteration on a boot spends a whole shot leaking
 it — `KASLR_LEAK_ONLY=1`, a process of its own
-([lib/exploit.sh](lib/exploit.sh#L1081)) — and later shots replay the cached value
+([lib/exploit.sh](lib/exploit.sh#L1092)) — and later shots replay the cached value
 through `KASLR_BASE`. The separate process is what leaves the racing process
 arriving cold: the leak drains thousands of pages through the page allocator, and
 the race that follows needs that allocator groomable for its order-3 reclaim
-spray ([lib/exploit.sh](lib/exploit.sh#L1074)). Replay also requires the entry to
+spray ([lib/exploit.sh](lib/exploit.sh#L1085)). Replay also requires the entry to
 declare `accepts_base`: GhostLock does
 ([entry.ghostlock@6.1](stages/entry.ghostlock@6.1/stage.toml#L135)), the 64560
 entry derives its slide in-process and reads no `KASLR_BASE`
@@ -279,14 +279,14 @@ taken mid-flight can return attacker-pointed memory and throw away a correct bas
 re-leaks.
 
 Root itself is never read out of a log. It is proved out of band by
-[`have_root`](lib/adb.sh#L170) behind [`root_oracle`](lib/exploit.sh#L813), which
+[`have_root`](lib/adb.sh#L170) behind [`root_oracle`](lib/exploit.sh#L824), which
 first checks that the chain declares `CAP_SU` at all — a hunt must not have a
 leftover `$DEV_SU` from an earlier GhostLock run answer for it.
 
 Before the first shot the runner checks the one precondition it can answer rather
 than infer: that the rendered device command line is complete and holds no
 unsubstituted `@PLACEHOLDER@`
-([lib/exploit.sh](lib/exploit.sh#L1010)). Everything else is observed, not
+([lib/exploit.sh](lib/exploit.sh#L1021)). Everything else is observed, not
 guessed.
 
 ### 4.2 Shot classification
@@ -304,7 +304,7 @@ editing the shell ([lib/exploit.sh](lib/exploit.sh#L49)).
 Nothing is inferred from timing or from an exit status the host cannot trust. No
 arm routes a bare exit status: the loader's early bails return
 `errno ? errno : <fixed>`, and those numbers guarantee nothing
-([lib/exploit.sh](lib/exploit.sh#L728)).
+([lib/exploit.sh](lib/exploit.sh#L739)).
 
 Three properties of the budget matter:
 
@@ -312,12 +312,12 @@ Three properties of the budget matter:
   `REFUSED_WALL` seconds never started (payload not pushed, wrong uid,
   `/data/local/tmp` cleared). Its response is settle-and-retry, rebooting only on
   a second refusal on the same boot — not a free retry that would loop forever on
-  a deterministic cause ([lib/exploit.sh](lib/exploit.sh#L1153)).
+  a deterministic cause ([lib/exploit.sh](lib/exploit.sh#L1164)).
 - `PANIC` spends a boot, not an attempt. `ROOT_MAX` (default 12) counts
   classifiable attempts; a panic decrements its own `PANIC_MAX`
-  ([lib/exploit.sh](lib/exploit.sh#L1136)). A separate cap on total shots keeps
+  ([lib/exploit.sh](lib/exploit.sh#L1147)). A separate cap on total shots keeps
   refusals and panics from spinning forever
-  ([lib/exploit.sh](lib/exploit.sh#L1051)).
+  ([lib/exploit.sh](lib/exploit.sh#L1062)).
 - A parked shot is not killed on the clock. A stage may park by design, because
   exiting would free its forged objects and panic. The deadline SIGKILLs only a
   shot proven hung by a stale `HEARTBEAT`
@@ -339,7 +339,7 @@ composes over damaged kernel state.
 
 Some exploits cannot be decomposed into the stage kinds above — the tree has the
 binary but not source structured as stages, or a monolith owns its groom,
-bridge, R/W and effect inline. A **foreign chain** models such an exploit as an
+bridge, R/W and effect inline. A *foreign chain* models such an exploit as an
 opaque process behind a declared contract, so the runner drives it through the
 same shot loop (budgets, `settle_boot`, per-shot archives,
 [`classify_shot`](lib/exploit.sh#L690)) a composed chain gets, without composing
@@ -395,7 +395,7 @@ heartbeat    = '[A-Z][A-Z0-9_]*_HEARTBEAT[[:space:]]+seq=[0-9]+'
 ```
 
 These fill the runner's overridable `MARK_*` EREs. `pass` is mandatory — it is
-how [`classify_shot`](lib/exploit.sh#L735) knows a shot reached the stage's
+how [`classify_shot`](lib/exploit.sh#L746) knows a shot reached the stage's
 goal, and the resolver
 [rejects a manifest without it](scripts/resolve-recipe.py#L308). `gate_fail`
 must be narrow: it maps to `PRECONDITION_FAIL`, which aborts the whole run, so a
@@ -418,7 +418,7 @@ An exit map may only name outcomes from the
 [§4.2](#42-shot-classification) vocabulary
 ([`OUTCOMES`](scripts/resolve-recipe.py#L99)). It is a refinement consulted
 only where a shot would otherwise score a bare `MISS`
-([`exit_outcome`](lib/exploit.sh#L794) sits below every marker arm in
+([`exit_outcome`](lib/exploit.sh#L805) sits below every marker arm in
 [`classify_shot`](lib/exploit.sh#L690)); markers always win. GhostLock's map is
 [empty](stages/entry.ghostlock@6.1/stage.toml#L155) for the reason in
 [§4.2](#42-shot-classification); 64560's
@@ -442,7 +442,7 @@ would supply once composed
 ([entry.cve64560@6.1](stages/entry.cve64560@6.1/stage.toml#L81)). The resolver
 unions `[properties].provides` across every selected stage into `CHAIN_CAPS`
 ([`contract_of`](scripts/resolve-recipe.py#L226)), and
-[`chain_has_su`](lib/exploit.sh#L806) reads that union to decide whether the
+[`chain_has_su`](lib/exploit.sh#L1033) reads that union to decide whether the
 chain can produce root at all.
 
 `./pixel-ksu-root --recipe <name> --target <t> --print-contract` renders the

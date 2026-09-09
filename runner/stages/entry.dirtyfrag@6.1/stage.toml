@@ -1,0 +1,224 @@
+# entry.dirtyfrag@6.1 — CVE-2026-43284 "DirtyFrag", the unprivileged reachability
+# probe.
+#
+# esp_input() (net/ipv4/esp4.c) takes the skip_cow fast path for any uncloned,
+# nonlinear skb with no frag_list and then runs the AEAD in place over that skb's
+# fragments; crypto_authenc_esn_decrypt() (crypto/authencesn.c) moves the
+# high-order sequence word to the end of the SGL before the hash is verified, so
+# a 4-byte store lands even though authentication is about to fail. Pin a
+# read-only page-cache page into that fragment and the store rewrites the file.
+# The fix — the added `&& !skb_has_shared_frag(skb)` in esp_input's second
+# skip_cow arm — is ABSENT from the shipped panther image: regenerate the harvest
+# with runner/scripts/harvest-live.sh, then disassemble the shipped image's
+# esp_input (runner/scripts/lib/disas-func.sh Image kallsyms.txt esp_input) and
+# the decision tests skb->cloned, skb->data_len and skb_shinfo(skb)->frag_list
+# and NEVER loads skb_shinfo(skb)->flags. Upstream stable v6.1.150/157/160 do not carry the fix
+# either, so the published version ranges do not describe this device; only the
+# image does.
+#
+# So the bug is live and the primitive is data-only — no offsets, no target
+# header, no KASLR base. What this stage measures is whether either half of it
+# can be REACHED from the shell domain, and the measured answer on panther is
+# that NEITHER can:
+#
+#   Wall 1, the trigger. socket(AF_NETLINK, SOCK_RAW, NETLINK_XFRM) -> EACCES:
+#   sepolicy grants the shell domain no netlink_xfrm_socket. CapBnd is 0x8000c0
+#   (CAP_SETGID | CAP_SETUID | CAP_SYSLOG), so CAP_NET_ADMIN is not merely
+#   unheld, it is outside the BOUNDING set and no exec and no file capability can
+#   put it back. CONFIG_USER_NS is off (unshare(CLONE_NEWUSER) -> EINVAL, no
+#   'user' entry in /proc/self/ns) and unshare(CLONE_NEWNET) -> EPERM, so the
+#   public chain's user-namespace route to CAP_NET_ADMIN does not exist here.
+#
+#   Wall 2, the pinning. The published chain pins the page-cache page with
+#   splice(file -> pipe -> socket); on android14-6.1 udp_sendpage() was converted
+#   to a udp_sendmsg() carrying MSG_SPLICE_PAGES but the machinery that honours
+#   the flag was not backported — skb_splice_from_iter() is ABSENT from the
+#   harvested kallsyms (runner/scripts/harvest-live.sh), __ip_append_data() has
+#   no MSG_SPLICE_PAGES arm, and
+#   ip_append_page() (the path that pins and sets SKBFL_SHARED_FRAG) survives
+#   with zero callers. The replacement this entry uses, sendmsg(MSG_ZEROCOPY)
+#   over a MAP_SHARED PROT_READ mapping, is not blocked but does not pin either:
+#   the completion on the error queue comes back
+#   SO_EE_ORIGIN_ZEROCOPY/SO_EE_CODE_ZEROCOPY_COPIED for every shape measured
+#   (24+16, 24+4096, 4096+4096, over lo and over wlan0, TCP and UDP) with
+#   SO_ZEROCOPY reading back 1.
+#
+# The probe writes nothing, holds nothing and is unprivileged; it exists so that
+# those two answers are archived by the shot loop with a kernel release and an
+# SELinux context beside them, rather than retyped from a terminal. The write
+# half lives in entry.dirtyfrag-write@6.1, which shares this source and this
+# build output and needs CAP_NET_ADMIN it has no way to obtain here.
+
+schema = 1
+kind   = "entry"
+id     = "entry.dirtyfrag@6.1"
+cve    = "CVE-2026-43284"
+kmi    = ["android14-6.1"]
+
+# No target restriction and no [facts]: the primitive is data-only. It reads no
+# kernel address, resolves no symbol and depends on no struct layout, so unlike
+# entry.cve64560@6.1 there is no `targets = [...]` here and it builds for every
+# android14-6.1 target.
+
+composed = false
+status   = "declared; builds standalone; runner-drivable as a foreign chain; the bug is unpatched on panther -- esp_input+0xcc in the shipped Image branches from frag_list == NULL straight to skip_cow with no skb_shinfo->flags test -- but the primitive is dead here for two independent reasons: the trigger half is out of reach from the shell domain (netlink_xfrm EACCES, CAP_NET_ADMIN outside the bounding set), and the payload half is out of reach from any domain, because skb_orphan_frags_rx() copies MSG_ZEROCOPY frags before ip_rcv(). Provides nothing and has never rooted."
+
+[build]
+# One static NDK binary with its own main() and two modes, driven as a foreign
+# chain — the same invocation shape as cve64560 and the badepoll oracle, not
+# GhostLock's dlopen'ed .so. entry.dirtyfrag-write@6.1 compiles the SAME source
+# to the SAME output name, the way the three badepoll entries share
+# oracle46242.c and cve-2026-46242-oracle; only the flag on the command line
+# differs (mode_probe() vs mode_write(), dispatched at the tail of main()).
+form    = "static-exe"
+entry   = "main"
+sources = ["cves/cve-2026-43284-dirtyfrag/dirtyfrag.c"]
+includes = []                   # self-contained: libc + linux/xfrm.h + netlink
+depends  = []
+defines  = []
+# No -pthread: the source is single-threaded. There is no race to lose here —
+# the probe asks two questions in sequence and prints the answers.
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-43284-dirtyfrag"
+uses_target_header = false
+
+[properties]
+# Every shot is independent and inert. --probe opens a netlink socket that is
+# refused, reads its own CapBnd, tries two unshare()s in a throwaway child and
+# mmaps a file read-only; nothing survives the process. Retrying costs a second.
+retry_safe  = true
+# There is no slide in this chain — the probe reads no KASLR base — so the two
+# fields say the same thing, and the answer is "none" rather than "low": no
+# kernel object is freed, no slab slot is reclaimed and no crypto path is
+# entered. The only kernel work a shot causes is a permission denial.
+panic_risk  = { pre_slide = "none", post_slide = "none" }
+# Nothing is written at all, on the device or in the kernel: --probe never
+# reaches the store, and the file it mmaps is opened O_RDONLY. Hence no restores
+# — the honest entry is an empty list, not a claim of cleanliness.
+destructive = []
+restores    = []
+# Empty, and deliberately so. CAP_FILE_W — the arbitrary 4-byte overwrite of a
+# read-only page-cache page — is what the WRITE half would supply once it lands,
+# and entry.dirtyfrag-write@6.1 declares it. This stage never reaches the store:
+# it measures whether the two halves of the primitive are reachable and stops at
+# the answer, so declaring the capability here would overstate what a passing
+# shot means. `provides` is the DECLARED capability graph (runner/README.md §5)
+# and the resolver unions it into CHAIN_CAPS, so a name written here would show
+# up in the contract of a recipe that cannot produce it.
+provides      = []
+requires_caps = []
+retains       = []
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/dirtyfrag-entry"
+mode = "755"
+# One device-side command. --probe is the default mode but is written out, so
+# the manifest and the archived command line say which half of the binary ran;
+# the write half is a separate stage with a separate recipe, never a flag flip
+# here. The probe is a single pass with no loop and no round count — it asks two
+# questions and exits — so nothing bounds a shot but the runner's own deadline,
+# and stdout is the whole marker stream, which is why the redirect is what puts
+# it in $DEV_LOG for archive_shot.
+command = "cd @DEV_TMP@; @DEV_ENTRY@ --probe > @DEV_LOG@ 2>&1"
+# No KASLR base is involved: the primitive is data-only, so nothing is replayed
+# into it. The resolver gates that accepts_base and the presence of @KASLR_ENV@
+# agree (runner/scripts/resolve-recipe.py, ARCH-G0-INVOKE), so the command
+# template above must not name it, and does not.
+accepts_base = false
+# The shell uid is the point. The whole question this stage asks is what uid 2000
+# in the shell domain can reach, so running it as root would answer a different
+# question and print a different capbnd. Contrast entry.cve64468@6.1, which must
+# open a privately-named binderfs device as root.
+needs_root = false
+
+[markers]
+# Both halves reachable — the trigger socket opened AND a page pinned into the
+# fragment, printed at the end of mode_probe(). Never observed on any device in
+# this tree; it is
+# declared because the resolver requires a `pass` pattern and because this is the
+# one line that would mean the write stage is worth firing.
+pass = 'DF_REACH_PASS xfrm=1 pin=1'
+# The measured outcome, and correctly a gate. runner/README.md §5 warns that
+# gate_fail must be NARROW because it maps to PRECONDITION_FAIL, which aborts the
+# whole run — a manifest routes transient preflight bails through the exit map to
+# REFUSED instead. Here the pattern is narrow AND permanent: the family is three
+# lines mode_probe() can reach (wall=xfrm_selinux, wall=no_net_admin,
+# wall=no_pin), and every one of them names a property of the domain, not a
+# condition of the moment. An SELinux class the policy does not grant and a
+# capability outside the bounding set do not come back after a settle or a
+# reboot, so aborting the run is the right response and re-firing twelve times
+# would only reprint the same three lines.
+gate_fail = 'DF_REACH_GATE_FAIL wall=[a-z_]+'
+# The probe holds no kernel state, performs no write and never parks: there is
+# nothing to repair and nothing to keep alive across the shot boundary. These
+# sentinels keep the generic defaults in runner/lib/exploit.sh from matching
+# something by accident, the same way entry.cve64468@6.1 does.
+restore_pass = 'DIRTYFRAG_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'DIRTYFRAG_NO_SUCH_RESTORE_BAD'
+heartbeat    = 'DIRTYFRAG_NO_SUCH_HEARTBEAT seq=[0-9]+'
+# What actually says how far a shot got, and the reason the archive is worth
+# keeping: the netlink verdict and its errno (DF_XFRM), whether a page pinned —
+# twice over, DF_PIN from the MSG_ZEROCOPY completion and DF_PAGE_IDENTITY from
+# probe_page_identity(), which measures the page rather than trusting the
+# notification — the bounding set with CAP_NET_ADMIN broken out (DF_CAP), the
+# route device's feature bits where readable (DF_FEATURES), and which of the
+# three pinning symbols this kernel has (DF_SYM). DF_SYM reads -1/-1/-1 from
+# an unprivileged shot because /proc/kallsyms is unreadable to uid 2000; the same
+# three symbols were resolved host-side from the harvested kallsyms
+# (runner/scripts/harvest-live.sh) instead.
+diag       = '(DF_XFRM .*|DF_PIN .*|DF_PAGE_IDENTITY .*|DF_FEATURES .*|DF_CAP .*|DF_SYM .*).*'
+# Empty: the probe runs once and counts nothing. There is no per-round counter to
+# extract, so declaring one would report a number that does not exist.
+diag_count = ''
+
+# Exit status -> outcome. The binary is a single writer with a fixed, documented
+# set of codes (the EX_* defines at the head of dirtyfrag.c), so the map is
+# meaningful here; markers
+# still win over it, and it only refines a shot that would otherwise score a bare
+# MISS. It is a refinement and not an oracle in a second sense too: `adb shell`
+# forwards a remote exit status only under the v2 shell protocol, so on a device
+# or host that negotiates v1 every arm below silently collapses to whatever the
+# markers said.
+#   0  EX_PASS     both halves reachable — the pass marker fired too, so this
+#                  arm is never reached
+#   1  EX_MISS     it ran and the answer was no       -> MISS (a real attempt)
+#   2  EX_WALL     a PERMANENT precondition failure   -> PRECONDITION_FAIL, and
+#                  the gate_fail marker above fires on the same shot
+#   3  EX_REFUSED  transient setup failure, nothing attempted -> REFUSED
+#   4  EX_USAGE    argv shape rejected                -> REFUSED (never started)
+[exit_map]
+"1" = "MISS"
+"2" = "PRECONDITION_FAIL"
+"3" = "REFUSED"
+"4" = "REFUSED"
+
+# This stage reaches a measurement — how far the primitive is out of reach — not
+# a capability the chain can hand on. Nothing has been OBSERVED to yield one, so
+# caps is empty and there is no field to extract from the pass marker that has
+# never fired; with no stage providing CAP_SU the runner drives the recipe as a
+# hunt (runner/README.md §2.3).
+[provides]
+caps  = []
+field = ''
+label = ""
+
+# NOT a reboot. Declaring any [[setup]] opts out of the reboot-per-shot the
+# runner synthesizes for a stage that declares none
+# (runner/lib/exploit.sh:1214), and for this stage that default would be pure
+# cost: the probe disturbs nothing — no kernel object freed, no slab slot
+# reclaimed, no file written — so a fresh boot cannot change what it measures,
+# and would spend ~15s per shot proving it.
+#
+# What the step does instead is record the two facts that decide the whole
+# result and that the archived stdout cannot recover afterwards: which kernel the
+# probe ran against, and which SELinux domain it ran IN. Wall 1 is a property of
+# that domain, so a shot log without it does not say what was measured.
+[[setup]]
+command = "echo dirtyfrag-setup kernel=$(uname -r) context=$(cat /proc/self/attr/current)"
+once_per_boot = true
+needs_root = false
+description = "record the kernel release and the SELinux domain the probe runs in"

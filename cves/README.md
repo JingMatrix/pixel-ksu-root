@@ -8,6 +8,9 @@ cves/
   cve-2026-43499-ghostlock/   CVE-2026-43499 — GhostLock
   cve-2026-64560/             CVE-2026-64560 — posix-cpu-timer UAF
   cve-2026-64468/             CVE-2026-64468 — binder process-lifetime UAF
+  cve-2026-46242-badepoll/    CVE-2026-46242 — Bad Epoll close-vs-close UAF (hunt + info-leak PoC + partial LPE chain)
+  cve-2026-43284-dirtyfrag/   CVE-2026-43284 — DirtyFrag xfrm-ESP page-cache write (hunt; both halves out of reach from shell)
+  cve-2026-49881-telecom/     CVE-2026-49881 — Telecom serviceClassExists (userspace domain pivot into system_server; research + domainprobe)
   kaslr/                      the write-free text-base leak, shared by all of them
   targets/                    per-device offset headers, 19 device-builds
   Makefile                    compiles one payload from a resolved recipe
@@ -15,6 +18,14 @@ cves/
 
 Which CVE the repo currently roots with, and what each bug is in one line, is the
 status table in the [root README](../README.md).
+
+`cve-2026-49881-telecom/` is the one entry that is not a kernel bug and does not
+root anything. It is a userspace privilege-domain pivot — a Telecom logic flaw
+that runs an app's code in `system_server` — and it earns a place here because it
+enlarges the userspace context kernel attack surface is reached from, which is
+what every kernel-CVE hunt in this tree depends on. Its live probe is the third
+domain of [`../domainprobe`](../domainprobe); the directory itself holds the
+writeup, the policy tool and the measured reachability.
 
 ## Baseline vs. candidate: the promotion gate
 
@@ -58,7 +69,7 @@ folds into the `ART_*` make variables and into the runner's contract:
 
 1. A recipe under [`../runner/recipes/`](../runner/recipes/) — one entry stage
    per kernel flavour plus any non-entry stages.
-   [`ghostlock.toml`](../runner/recipes/ghostlock.toml#L22) pairs a 6.1 and a 6.6
+   [`ghostlock.toml`](../runner/recipes/ghostlock.toml#L21) pairs a 6.1 and a 6.6
    entry with the shared
    [`handoff.suhelper`](../runner/recipes/ghostlock.toml#L19);
    [`cve64560.toml`](../runner/recipes/cve64560.toml#L33) declares `stages = []`,
@@ -81,7 +92,7 @@ The [`Makefile`](Makefile) compiles one payload from a resolved recipe. The
 source list is not written into it; it is composed from the recipe,
 [`../data/targets.json`](../data/targets.json) and the stage manifests by the
 resolver at
-[`RESOLVER := ../runner/scripts/resolve-recipe.py`](Makefile#L70). Run from
+[`RESOLVER := ../runner/scripts/resolve-recipe.py`](Makefile#L63). Run from
 `cves/`:
 
 ```sh
