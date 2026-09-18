@@ -1,0 +1,69 @@
+# runner/recipes/dirtyfrag.toml — CVE-2026-43284 "DirtyFrag", reachability probe.
+#
+# The entry is an instrument, not an exploit: it does not attempt the write. It
+# measures, from the shell domain and in one pass, whether the two halves the
+# primitive needs can be reached at all — the netlink_xfrm socket that installs
+# the forged SA, and a page-cache page pinned into an skb fragment — and stops at
+# the answer. With no stage providing CAP_SU the runner drives a
+# `--recipe dirtyfrag` run as a HUNT — no manager is detected, no ksud is derived
+# and nothing is late-loaded (runner/README.md §2.3).
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=dirtyfrag   # build it
+#     ./pixel-ksu-root --recipe dirtyfrag                    # measure with it
+#
+# The bug itself is live on panther: esp_input()'s skip_cow fast path takes any
+# uncloned, nonlinear, frag_list-free skb and lets crypto_authenc_esn_decrypt()
+# store the high-order sequence word past the end of the SGL before the hash is
+# checked, and the shipped image's esp_input never loads
+# skb_shinfo(skb)->flags, so the `!skb_has_shared_frag(skb)` fix is absent.
+# What is not live is the reach, and this recipe is how the two walls get
+# archived rather than retold:
+#
+#   Wall 1 — the trigger. socket(AF_NETLINK, SOCK_RAW, NETLINK_XFRM) returns
+#   EACCES: sepolicy grants the shell domain no netlink_xfrm_socket. CapBnd reads
+#   0x8000c0, so CAP_NET_ADMIN is outside the BOUNDING set and no exec and no
+#   file capability can restore it, and CONFIG_USER_NS is off, so the public
+#   chain's user-namespace route to CAP_NET_ADMIN does not exist here either.
+#   The published chain crosses this with a SECOND bug in
+#   com.android.server.telecom — also live on this build — that needs an
+#   installed APK, which is a stage kind this framework does not have yet.
+#
+#   Wall 2 — the pinning. splice(file -> pipe -> socket), the published chain's
+#   way of getting a read-only page-cache page into the fragment, lost its
+#   zero-copy on android14-6.1: skb_splice_from_iter() is absent from the
+#   harvested kallsyms (runner/scripts/harvest-live.sh), __ip_append_data() has
+#   no MSG_SPLICE_PAGES arm, and
+#   ip_append_page() survives with zero callers, so the send copies and fails
+#   silently. The sendmsg(MSG_ZEROCOPY) replacement this entry uses instead
+#   reports SO_EE_CODE_ZEROCOPY_COPIED for every shape measured.
+#
+# Because both answers are permanent properties of the domain rather than
+# transient conditions, the entry emits its DF_REACH_GATE_FAIL family, which the
+# manifest maps to PRECONDITION_FAIL: the run aborts on the first shot instead of
+# spending twelve of them reprinting the same three lines
+# (runner/stages/entry.dirtyfrag@6.1/stage.toml [markers] says why that is a
+# narrow gate and not a broad one).
+#
+# The write half is a separate recipe, dirtyfrag-write, driving
+# entry.dirtyfrag-write@6.1 over the same source and the same build output; it
+# needs CAP_NET_ADMIN, which nothing in this tree supplies.
+#
+# No target restriction: the primitive is data-only — no offsets, no target
+# header, no KASLR base — so it builds for every android14-6.1 target rather than
+# the single build a cve64560.h pins.
+
+schema      = 1
+name        = "dirtyfrag"
+description = "CVE-2026-43284 DirtyFrag reachability probe: unprivileged, writes nothing. The esp_input skip_cow bug is unpatched on panther, but netlink_xfrm is EACCES from the shell domain, CAP_NET_ADMIN is outside the bounding set, and no pinning path zero-copies on this tree. Provides nothing; never rooted."
+default     = false
+
+# No non-entry stages: the entry is a self-contained standalone binary with its
+# own main(), and there is no handoff because there is no capability to hand on.
+stages = []
+
+[entry]
+"android14-6.1" = "entry.dirtyfrag@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

@@ -1,0 +1,99 @@
+# entry.frostwalk-reclaim@6.1 — CVE-2026-64469 binder transaction-stack UAF,
+# reclaim hunt. Extends entry.frostwalk@6.1's confirmed-free handoff: in the
+# window between the confirmed binder_free_transaction() and the sender's own
+# BINDER_THREAD_EXIT, floods kmalloc-192 with filler transactions sent by the
+# controller (not the sender), pinned to the CPU the free landed on, then
+# signals the sender to run the walk. See reclaim64469.c's header for the two
+# informative outcomes (MISS, PANIC) and why a PANIC here is the result this
+# hunt exists to produce, not a failure of it. Needs domainprobe
+# (dev.pixelksu.domainprobe) installed. Needs root only for the confirmed-free
+# kprobe instrument, same as entry.frostwalk@6.1.
+
+schema = 1
+kind   = "entry"
+id     = "entry.frostwalk-reclaim@6.1"
+cve    = "CVE-2026-64469"
+kmi    = ["android14-6.1"]
+targets = ["panther-CP2A.260705.006"]
+composed = false
+status   = "runner-drivable; verify-read added (see reclaim64469.c) to distinguish a confirmed reclaim from an unreclaimed slot before signalling; not yet run on hardware in this form"
+
+[build]
+form    = "static-exe"
+entry   = "main"
+sources = ["cves/cve-2026-64469-frostwalk/reclaim64469.c",
+           "cves/lib/trigger/binder.c",
+           "cves/lib/trigger/amclient.c",
+           "cves/lib/trigger/app_saturator.c",
+           "cves/lib/trace/fnprobe.c",
+           "cves/lib/rw/kprobe_read.c"]
+includes = []
+depends  = ["cves/lib/trigger/binder.h", "cves/lib/trigger/amclient.h",
+            "cves/lib/trigger/app_saturator.h", "cves/lib/trace/fnprobe.h",
+            "cves/lib/base/util.h", "cves/lib/base/handoff.h",
+            "cves/lib/rw/kprobe_read.h"]
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-64469-frostwalk-reclaim"
+uses_target_header = false
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/cve64469-reclaim"
+mode = "755"
+# One attempt per shot, same caution as entry.frostwalk@6.1's danger note: the
+# runner's own loop supplies shot-to-shot retries, and a PANIC costs a reboot.
+command = "cd @DEV_TMP@; @DEV_ENTRY@ --attempts 1 --fillers 400 > @DEV_LOG@ 2>&1"
+accepts_base = false
+needs_root = true
+
+[markers]
+# No real pass text: the informative result is a PANIC, which the runner
+# detects structurally (the device not coming back), not through a marker
+# read from a log the panic itself prevents from being flushed. This sentinel
+# never matches, same purpose as frostwalk's own unused sentinels.
+pass = 'CVE64469_RECLAIM_NO_SUCH_PASS'
+gate_fail    = 'CVE64469_NO_SUCH_GATE'
+restore_pass = 'CVE64469_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'CVE64469_NO_SUCH_RESTORE_BAD'
+heartbeat    = 'CVE64469_NO_SUCH_HEARTBEAT seq=[0-9]+'
+diag       = '(controller: (free observed on CPU|filler sends|sender (was KILLED|exited normally)).*|sender: BINDER_THREAD_EXIT returned.*)'
+diag_count = 'attempt [0-9]+/[0-9]+'
+
+# Exit status -> outcome; markers win over it. A PANIC never reaches this map
+# at all — the process doesn't return.
+#   0 completed, sender exited normally -> MISS
+#   1 setup/handshake failure (amclient/app_saturator/handoff) -> REFUSED
+#   2 free not observed within the timeout -> MISS
+[exit_map]
+"0" = "MISS"
+"1" = "REFUSED"
+"2" = "MISS"
+
+# Reaches a research milestone, not a capability: provides nothing.
+[provides]
+caps  = []
+field = ''
+label = ""
+
+[properties]
+retry_safe  = false
+# pre_slide: the confirmed-free wait itself touches no filler content, same
+# low risk as entry.frostwalk@6.1. post_slide: the whole point of this stage
+# is a filler-content walk that may BUG() — deliberately high, not a defect.
+panic_risk  = { pre_slide = "low", post_slide = "high" }
+destructive = ["a flood of filler transactions sent to system_server's activity service (benign content, bounded by --fillers)",
+               "domainprobe repeatedly force-stopped",
+               "a deliberate attempt to make BINDER_THREAD_EXIT's walk dereference reclaimed memory -- see reclaim64469.c; a landed reclaim panics the device"]
+restores    = []
+
+# Same reasoning as entry.frostwalk@6.1's own [[setup]]: no [[setup]] at all
+# would default to a reboot before every shot, which this stage does not need.
+[[setup]]
+command = "am force-stop dev.pixelksu.domainprobe"
+needs_root = false
+once_per_boot = false
+description = "reset domainprobe to a clean stopped state before each shot"

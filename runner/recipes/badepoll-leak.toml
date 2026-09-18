@@ -1,0 +1,34 @@
+# runner/recipes/badepoll-leak.toml — CVE-2026-46242 "Bad Epoll" cross-process leak.
+#
+# Shares badepoll.toml's detection-hunt background: the close-vs-close window
+# in __ep_remove() and the HUNT classification (no stage provides CAP_SU, so
+# the runner detects no manager and late-loads nothing). This recipe stops
+# short of escalation: race the UAF to a win, orphan the epitem, then read
+# whatever struct file the system reuses in the freed slot through
+# /proc/self/fdinfo. No root, no offsets, no reboot; panic risk is the low
+# residual kind (a foreign eventpoll could still grab the slot), not the
+# escalation recipe's deliberate one.
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=badepoll-leak   # build it
+#     ./pixel-ksu-root --recipe badepoll-leak                    # drive it
+#
+# runner/stages/entry.badepoll-leak@6.1/stage.toml [invoke] says how.
+#
+# No target restriction: the probe needs no offsets, so it builds for every
+# android14-6.1 target.
+
+schema      = 1
+name        = "badepoll-leak"
+description = "CVE-2026-46242 cross-process info leak: race the UAF, orphan the epitem, read the metadata of files OTHER processes open through ep_show_fdinfo. Demonstrated capability; no root, no offsets, no reboot."
+default     = false
+
+# No non-entry stages: the entry is a self-contained standalone binary with its
+# own main(), and there is no handoff because there is no capability to hand on.
+stages = []
+
+[entry]
+"android14-6.1" = "entry.badepoll-leak@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

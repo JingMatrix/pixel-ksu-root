@@ -1,0 +1,104 @@
+# entry.dirtyfrag@6.1 — CVE-2026-43284 "DirtyFrag", the unprivileged reachability
+# probe.
+#
+# The bug (esp_input skip_cow fast path storing a 4-byte word into a pinned
+# read-only page) is live on panther, but this stage only measures whether either
+# half can be reached from the shell domain — it writes nothing. The write half is
+# entry.dirtyfrag-write@6.1, which shares this source and build output.
+
+schema = 1
+kind   = "entry"
+id     = "entry.dirtyfrag@6.1"
+cve    = "CVE-2026-43284"
+kmi    = ["android14-6.1"]
+
+# No target restriction and no [facts]: the primitive is data-only, so it builds
+# for every android14-6.1 target.
+
+composed = false
+status   = "declared; builds standalone; runner-drivable; the bug is unpatched on panther but the primitive is dead here — the trigger half is out of reach from the shell domain (netlink_xfrm EACCES, CAP_NET_ADMIN outside the bounding set) and the payload half from any domain (skb_orphan_frags_rx copies MSG_ZEROCOPY frags before ip_rcv); provides nothing"
+
+[build]
+# One static NDK binary with two modes; entry.dirtyfrag-write@6.1 compiles the
+# SAME source to the SAME output and differs only in its [invoke] command.
+form    = "static-exe"
+entry   = "main"
+sources = ["cves/cve-2026-43284-dirtyfrag/dirtyfrag.c", "cves/cve-2026-43284-dirtyfrag/xfrm_trigger.c"]
+includes = []                   # self-contained: libc + linux/xfrm.h + netlink
+depends  = []
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-Werror"]   # no -pthread: single-threaded
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-43284-dirtyfrag"
+uses_target_header = false
+
+[properties]
+# Every shot is independent and inert: opens a refused netlink socket, reads its
+# own CapBnd, tries two unshare()s in a throwaway child, mmaps a file O_RDONLY.
+retry_safe  = true
+# No slide and no kernel object touched; the only kernel work is a permission denial.
+panic_risk  = { pre_slide = "none", post_slide = "none" }
+destructive = []   # --probe never reaches the store; the mmap is O_RDONLY
+restores    = []
+# Empty: CAP_FILE_W is what the WRITE half would supply; this stage only measures
+# reachability, so declaring it here would overstate a passing shot.
+provides      = []
+requires_caps = []
+retains       = []
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/dirtyfrag-entry"
+mode = "755"
+# --probe (the default, written out so the archived command line records which
+# half ran). A single pass, no loop; unbuffered stdout is the whole marker stream.
+command = "cd @DEV_TMP@; @DEV_ENTRY@ --probe > @DEV_LOG@ 2>&1"
+accepts_base = false   # data-only primitive, no base to replay
+# The shell uid is the point: the question is what uid 2000 in the shell domain
+# can reach, so running as root would answer a different question.
+needs_root = false
+
+[markers]
+# Both halves reachable — trigger socket opened AND a page pinned. Never observed;
+# declared because the resolver requires a pass pattern.
+pass = 'DF_REACH_PASS xfrm=1 pin=1'
+# The measured outcome, and correctly a gate (narrow AND permanent): the three
+# walls it names (xfrm_selinux, no_net_admin, no_pin) are domain properties that
+# a settle or reboot cannot change, so PRECONDITION_FAIL is right.
+gate_fail = 'DF_REACH_GATE_FAIL wall=[a-z_]+'
+# Sentinels: no kernel state held, nothing to repair or keep alive.
+restore_pass = 'DIRTYFRAG_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'DIRTYFRAG_NO_SUCH_RESTORE_BAD'
+heartbeat    = 'DIRTYFRAG_NO_SUCH_HEARTBEAT seq=[0-9]+'
+# How far a shot got: netlink verdict+errno, whether a page pinned (DF_PIN and the
+# in-band DF_PAGE_IDENTITY), the bounding set (DF_CAP), route features (DF_FEATURES)
+# and which pinning symbol this kernel has (DF_SYM; -1s unprivileged, resolved host-side).
+diag       = '(DF_XFRM .*|DF_PIN .*|DF_PAGE_IDENTITY .*|DF_FEATURES .*|DF_CAP .*|DF_SYM .*).*'
+diag_count = ''   # the probe runs once and counts nothing
+
+# Exit status -> outcome (the EX_* defines in dirtyfrag.c); markers win over it,
+# and adb only forwards a status under the v2 shell protocol.
+#   1 ran, answer no -> MISS   2 permanent wall -> PRECONDITION_FAIL (+gate_fail)
+#   3 transient setup / 4 bad argv -> REFUSED
+[exit_map]
+"1" = "MISS"
+"2" = "PRECONDITION_FAIL"
+"3" = "REFUSED"
+"4" = "REFUSED"
+
+# Reaches a measurement, not a capability; nothing observed, so caps is empty.
+[provides]
+caps  = []
+field = ''
+label = ""
+
+# NOT a reboot: the probe disturbs nothing, so a fresh boot cannot change what it
+# measures. The step instead records the kernel release and SELinux domain the
+# probe ran in — Wall 1 is a property of that domain, so the archive needs it.
+[[setup]]
+command = "echo dirtyfrag-setup kernel=$(uname -r) context=$(cat /proc/self/attr/current)"
+once_per_boot = true
+needs_root = false
+description = "record the kernel release and the SELinux domain the probe runs in"

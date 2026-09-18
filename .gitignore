@@ -37,6 +37,15 @@ cves/cve-2026-64468-frostbind/nested64468
 cves/cve-2026-64468-frostbind/pump64468
 cves/cve-2026-64468-frostbind/race64468
 cves/cve-2026-64468-frostbind/racing64468
+# CVE-2026-56914 compiled probes (sources tracked)
+cves/cve-2026-56914-dirtydock/dirtydock_poke
+cves/cve-2026-56914-dirtydock/ioctl_probe
+# CVE-2026-56945 compiled probe (source tracked) and captured AV1 decode
+# blobs (not build output; see README.md for how they were captured)
+cves/cve-2026-56945-roguewave/fault_trigger
+cves/cve-2026-56945-roguewave/real_regs_blob.bin
+cves/cve-2026-56945-roguewave/real_multiframe_blob.bin
+cves/cve-2026-56945-roguewave/poisoned_multiframe_blob.bin
 # KASLR probe (source tracked)
 cves/lib/kaslr/kaslr_marker
 # shared research tools (compiled)

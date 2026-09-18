@@ -1219,6 +1219,12 @@ def main():
              str(stages[entry_id].get("properties", {}).get("shot_timeout", "") or "")),
             ("RUN_PROP_PROGRESS_EVERY",
              str(stages[entry_id].get("properties", {}).get("progress_every", "") or "")),
+            # Capabilities this stage consumes as a precondition rather than
+            # producing (e.g. a stage whose own setup plan does not reboot:
+            # "needs a root already on the boot"). Unenforced until
+            # setup_precheck() reads it.
+            ("RUN_PROP_REQUIRES_CAPS",
+             " ".join(stages[entry_id].get("properties", {}).get("requires_caps", []))),
         ]
         # Setup steps: an ordered list the runner runs before each shot. Emitted
         # as a count plus five vars per step, so load_entry_contract() can read
