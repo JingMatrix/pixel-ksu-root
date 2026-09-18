@@ -1,0 +1,123 @@
+# bench.crosscache@6.1 — how often the shared cross-cache placement lands.
+#
+# Several chains take a page from one allocator cache and refill it from
+# another through one shared implementation, so its landing rate is a property
+# they all inherit.
+#
+# The chains are blind to their own placements: the bytes go to an address a
+# groom named, and the first sign of a miss is a later step failing for reasons
+# nothing can attribute. Checking one with a chain's own read costs a won race
+# per sample, which this target budgets at hundreds of attempts.
+#
+# A privileged run reads the page instead: ground truth rather than an inference
+# through an exploit primitive, no race, no attempt budget, nothing to restore.
+# A sample costs one groom.
+#
+# Root is used only to observe, and no CVE is linked, so nothing about one chain
+# can flatter or spoil the number.
+
+schema = 1
+kind   = "entry"
+id     = "bench.crosscache@6.1"
+cve    = ""                        # measures a shared primitive, not a vulnerability
+kmi    = ["android14-6.1"]
+targets = ["panther-CP2A.260705.006"]
+
+composed = false
+status   = "instrument, not an exploit: measures how often the shared cross-cache placement lands, judged by reading the placed page as root. Arms nothing and reaches no capability."
+
+[build]
+form    = "static-exe"
+entry   = "main"
+# The harness and the shared placement. No CVE is linked: what is measured is a
+# library primitive, so nothing about one chain can flatter or spoil the number.
+sources = ["cves/bench/crosscache.c",
+           "cves/lib/rw/kprobe_read.c",
+           "cves/lib/spray/crosscache/crosscache.c",
+           "cves/lib/spray/sockpool.c",
+           "cves/lib/leak/futex_scan.c"]
+includes = ["cves"]
+depends  = []
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "crosscache-bench"
+uses_target_header = true
+
+[facts]
+header    = "cves/targets/{target}/cve64560.h"
+generator = "runner/scripts/gen-cve64560-offsets.py"
+# None. The bench resolves no kernel symbol: it judges a page by the address the
+# page itself carries, and takes the object geometry from the target header.
+requires = []
+forbids  = []
+
+[properties]
+retry_safe  = true
+# Nothing is armed, no race is run and no kernel pointer is made to point at
+# anything the bench allocates. What remains is an allocation-heavy process.
+panic_risk  = { pre_slide = "low", post_slide = "low" }
+# The pages are released as they are judged, and nothing ever named them.
+destructive = []
+restores    = []
+provides      = []
+requires_caps = ["CAP_SU"]
+retains       = []
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/crosscache-bench"
+mode = "755"
+# Rounds, refill-send counts and methods are command-line arguments, so both the
+# sample size and what is being swept are run-time decisions.
+#
+# Rounds within a run are not independent samples: a comparison interleaves the
+# variants inside each block and alternates their order between blocks.
+command = "cd @DEV_TMP@; @DEV_ENTRY@ --rounds 30 --method swap,direct --sweep 1,4 > @DEV_LOG@ 2>&1"
+# The bench composes no kernel address of its own; the payload's symbols are
+# inert bytes here, because what is measured is which page an allocation takes.
+accepts_base = false
+# Root is the judge, never the method: it reads the placed page and nothing else.
+needs_root = true
+
+[markers]
+# Printed only when at least one round reached a verdict. The totals line is
+# always printed, so scoring on it would call a run that learned nothing a pass.
+pass = 'CROSSCACHE_BENCH_JUDGED rounds=[0-9]+'
+gate_fail = 'BENCH_GATE_FAIL'
+# The measurement itself, so the answer reaches whoever started the run rather
+# than only the archived log.
+diag = '(RESULT method=.*|CROSSCACHE_BENCH_TOTAL .*)'
+diag_count = 'landed=[0-9]+'
+
+# 2 the privileged read or the processor roles were unavailable, so nothing
+# could be judged; 3 every round failed to produce a verdict.
+[exit_map]
+"0" = "PASS"
+"2" = "PRECONDITION_FAIL"
+"3" = "REFUSED"
+
+[provides]
+caps  = []
+field = ''
+label = ""
+
+# Deliberately no reboot.
+#
+# This stage borrows an su left behind by a baseline root earlier on the same
+# boot. A reboot would destroy the precondition it needs, which is why the check
+# below runs as a setup step: with no su present, the run is abandoned before it
+# spends a boot, and the operator is told what to run first.
+#
+# A quiet allocator still matters, and it comes for free: the root route reboots
+# for a fresh boot of its own, so this runs on a boot that is both freshly
+# started and freshly rooted.
+[[setup]]
+# The runner prints a step's description when it has one and the raw shell
+# otherwise, so every setup step states what it is for rather than how.
+description = "confirm the su this borrows is present, and say which boot it belongs to"
+command = "echo root uid=$(id -u) up=$(cut -d. -f1 /proc/uptime)s"
+needs_root = true
+once_per_boot = true
