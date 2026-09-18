@@ -1,0 +1,79 @@
+# entry.frostbind@6.1 — CVE-2026-64468 binder UAF, run as a foreign chain.
+# A detection hunt: racing64468 self-detects a landed reclaim in its own sprayed
+# kmalloc-1k objects. Runs as root to open a private binderfs device.
+
+schema = 1
+kind   = "entry"
+id     = "entry.frostbind@6.1"
+cve    = "CVE-2026-64468"
+kmi    = ["android14-6.1"]
+targets = ["panther-CP2A.260705.006"]
+composed = false
+status   = "declared; builds standalone; runner-drivable; the vulnerable read executes but the reclaim is not observed to land on bare metal; detection hunt, provides nothing"
+
+[build]
+form    = "static-exe"
+entry   = "main"
+# racing64468.c is the concurrent race + self-detecting reclaim driver (checks its
+# own sprayed kmalloc-1k objects for the +108 decrement, so it needs no ftrace).
+# The other harnesses in this dir (pump64468/race64468/nested64468/binderctl) are
+# not runner-drivable attempts.
+sources = ["cves/cve-2026-64468-frostbind/racing64468.c",
+           "cves/lib/trigger/binder.c",
+           "cves/lib/spray/skbspray.c"]
+includes = []                   # libc + linux/android/binder.h + header-only cves/lib
+depends  = ["cves/lib/spray/skbspray.h", "cves/lib/base/util.h", "cves/lib/*/*.h"]
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-64468-frostbind"
+uses_target_header = false
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/cve64468-racing"
+mode = "755"
+# 200 attempts per shot bounds it; the runner's loop supplies the retries.
+# --pump runs a background kmalloc-1k churn so OUR benign object occupies the freed
+# slot rather than a foreign one — it raises the WIN rate and lowers the panic rate.
+# Opens /dev/binderfs/ksu64468 (from the [[setup]] step); absent it, exits 3 -> REFUSED.
+command = "cd @DEV_TMP@; @DEV_ENTRY@ --pump 200 > @DEV_LOG@ 2>&1"
+accepts_base = false
+# Runs as root: binderfs labels its device by genfscon and the shell domain cannot
+# open a privately-named one.
+needs_root = true
+
+[markers]
+# The win: the +108 decrement landed in one of the driver's own sprayed objects.
+pass = 'WIN detected \([0-9]+ touched objects\)'
+# Sentinels: the driver crafts a benign object so a landed write never panics.
+gate_fail    = 'CVE64468_NO_SUCH_GATE'
+restore_pass = 'CVE64468_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'CVE64468_NO_SUCH_RESTORE_BAD'
+heartbeat    = 'CVE64468_NO_SUCH_HEARTBEAT seq=[0-9]+'
+# On a MISS, the summary line says how far the shot got.
+diag       = '(done: attempts_built=[0-9]+ wins=[0-9]+|a[0-9]+: WIN detected).*'
+diag_count = 'attempts_built=[0-9]+'
+
+# Exit status -> outcome; markers win over it.
+#   1 ran to completion, no win -> MISS   3 die(): private device not opened -> REFUSED
+[exit_map]
+"1" = "MISS"
+"3" = "REFUSED"
+
+# Reaches a research milestone, not a capability: provides nothing, so hunt path.
+[provides]
+caps  = []
+field = ''
+label = ""
+
+# Create the private binderfs device once per boot, as root (binder-control is
+# 0600 root and CONFIG_USER_NS is off). Does NOT reboot: the device is
+# non-persistent, so the run must hold the boot that created it.
+[[setup]]
+command = "@DEV_ENTRY@ setup"
+needs_root = true
+once_per_boot = true
+description = "create the private binderfs device /dev/binderfs/ksu64468"

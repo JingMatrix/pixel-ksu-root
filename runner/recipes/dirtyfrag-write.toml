@@ -1,0 +1,60 @@
+# runner/recipes/dirtyfrag-write.toml — CVE-2026-43284 "DirtyFrag", the
+# write-primitive proof.
+#
+# The other half of the pair. runner/recipes/dirtyfrag.toml drives the SAME
+# binary in --probe mode, unprivileged, to measure which half of the primitive is
+# reachable from the shell domain; this one drives it in --write mode, under a
+# root that must already be on the device, to measure whether the kernel-side
+# store lands at all:
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=dirtyfrag-write   # build it
+#     ./pixel-ksu-root --recipe ghostlock                          # root first,
+#     ./pixel-ksu-root --recipe dirtyfrag-write                    # then measure
+#
+# The order is not a convenience. The trigger half of this bug is installing an
+# XFRM state whose XFRMA_REPLAY_ESN_VAL.seq_hi is the value the store writes, and
+# the shell domain cannot: socket(AF_NETLINK, SOCK_RAW, NETLINK_XFRM) is EACCES
+# and CAP_NET_ADMIN is not in the domain's bounding set, with no user namespace to
+# borrow one from (CONFIG_USER_NS is off). So this recipe does not CROSS that
+# wall, it bypasses it, by borrowing an su left behind by a baseline root earlier
+# on the same boot. With no such su, runner/lib/exploit.sh's setup_precheck()
+# abandons the run before it spends a boot and prints the command to run first.
+# runner/stages/entry.dirtyfrag-write@6.1/stage.toml says all of this at length,
+# including why the manifest declares no reboot: a reboot would destroy the very
+# precondition the stage needs.
+#
+# What it buys is a measurement the probe cannot reach. The published chain's
+# splice(file -> pipe -> socket) pinning path is expected to change nothing here
+# — android14-6.1 has udp_sendpage() converted to a MSG_SPLICE_PAGES sendmsg
+# without the backport that honours the flag — and the MSG_ZEROCOPY replacement
+# comes back SO_EE_CODE_ZEROCOPY_COPIED for every shape tried, on lo and on
+# wlan0, TCP and UDP. But a copy that happens AFTER esp_input() has run would
+# still leave the 4 bytes written, and only reading the file back settles it.
+# --method both runs both paths in one shot, so the archived log is the record of
+# the difference rather than a claim about it.
+#
+# A HUNT, not a root path: no stage provides CAP_SU, so `--recipe dirtyfrag-write`
+# detects no manager, derives no ksud and late-loads nothing
+# (runner/README.md §2.3). The product is the classified evidence the runner
+# writes for the run — its per-shot logs and shot index. The store has never been
+# observed to land on hardware, and this recipe roots nothing.
+#
+# No target restriction: the primitive is data-only — no offsets, no target
+# header, no KASLR base — so it builds for every android14-6.1 target rather than
+# the single build a generated header would pin.
+
+schema      = 1
+name        = "dirtyfrag-write"
+description = "CVE-2026-43284 write-primitive proof: does the 4-byte esp_input() store land in the page cache of a read-only file? Needs a prior baseline root on the same boot to install the SA; provides nothing and never roots."
+default     = false
+
+# No non-entry stages: the entry is a self-contained standalone binary with its
+# own main(), and there is no handoff because there is no capability to hand on.
+stages = []
+
+[entry]
+"android14-6.1" = "entry.dirtyfrag-write@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

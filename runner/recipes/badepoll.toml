@@ -1,0 +1,36 @@
+# runner/recipes/badepoll.toml — CVE-2026-46242 "Bad Epoll", detection hunt.
+#
+# The entry is an instrument, not an exploit: it measures whether the
+# close-vs-close window in __ep_remove() can be won on this kernel and stops at
+# the answer. With no stage providing CAP_SU the runner drives a
+# `--recipe badepoll` run as a HUNT — no manager is detected, no ksud is derived
+# and nothing is late-loaded (runner/README.md §2.3).
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=badepoll   # build it
+#     ./pixel-ksu-root --recipe badepoll                    # hunt with it
+#
+# This bug's characteristic failure is a panic in somebody else's slab object,
+# and the run itself is how you read it: every panic is counted and its pstore
+# record saved to logs/panic-<run>/, win or lose (README.md, "Debugging a
+# panic"). Add --no-reclaim to the entry's command to make that panic the intent
+# rather than the accident;
+# runner/stages/entry.badepoll@6.1/stage.toml [invoke] says how.
+#
+# No target restriction: the probe needs no offsets, so it builds for every
+# android14-6.1 target rather than the single build a cve64560.h pins.
+
+schema      = 1
+name        = "badepoll"
+description = "CVE-2026-46242 Bad Epoll entry: foreign chain — buildable and runner-drivable, NOT composed, provides nothing, never rooted. Needs no root and no setup."
+default     = false
+
+# No non-entry stages: the entry is a self-contained standalone binary with its
+# own main(), and there is no handoff because there is no capability to hand on.
+stages = []
+
+[entry]
+"android14-6.1" = "entry.badepoll@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

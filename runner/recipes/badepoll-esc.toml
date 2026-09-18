@@ -1,0 +1,32 @@
+# runner/recipes/badepoll-esc.toml — CVE-2026-46242 "Bad Epoll" escalation.
+#
+# Shares badepoll.toml's detection-hunt background: the close-vs-close window
+# in __ep_remove(), the HUNT classification (no stage provides CAP_SU, so the
+# runner detects no manager and late-loads nothing), and the panic-as-evidence
+# convention (every panic is counted and its pstore record archived, README.md
+# "Debugging a panic"). This recipe adds the escalation itself: orphan the
+# epitem and drive the read/write chains through it, deliberately risking a
+# foreign-allocation panic on a missed reclaim.
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=badepoll-esc   # build it
+#     ./pixel-ksu-root --recipe badepoll-esc                    # drive it
+#
+# runner/stages/entry.badepoll-esc@6.1/stage.toml [invoke] says how --no-reclaim
+# and --panic-debug fit together. Target-restricted (unlike badepoll.toml): the
+# escalation's facts are stated by only one build's header.
+
+schema      = 1
+name        = "badepoll-esc"
+description = "CVE-2026-46242 escalation: orphan the epitem and take the dangling struct file. Forfeits the boot on a missed reclaim — expect panics, and read them out of logs/panic-<run>/."
+default     = false
+
+# No non-entry stages: the entry is a self-contained standalone binary with its
+# own main(), and there is no handoff because there is no capability to hand on.
+stages = []
+
+[entry]
+"android14-6.1" = "entry.badepoll-esc@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]
