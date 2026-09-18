@@ -1,0 +1,42 @@
+# runner/recipes/crosscache-bench.toml — the landing rate of the shared
+# cross-cache placement.
+#
+# Several chains take a page from one allocator cache and refill it from
+# another through one shared implementation, so its landing rate is a property
+# they all inherit and a change that moves this number moves theirs.
+#
+# The chains cannot measure it themselves: each is blind to its own placement,
+# and checking one with a chain's own read costs a won race per sample -- on
+# this target, hundreds of attempts. A run that already has root simply reads
+# the placed page. Ground truth, one groom per sample, nothing to restore.
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=crosscache-bench   # build it
+#     ./pixel-ksu-root --recipe ghostlock                           # root first,
+#     ./pixel-ksu-root --recipe crosscache-bench                    # then measure
+#
+# The order is not a convenience. This recipe borrows an su left behind by a
+# baseline root earlier on the SAME boot, and declares no reboot of its own
+# because a reboot would destroy that precondition. With no such su, the setup
+# check abandons the run before it spends a boot and prints what to run first.
+#
+# Root is used only to observe. The placement is the one the chains perform, so
+# the number describes them and not this harness. The recipe reaches no
+# capability and leaves nothing behind.
+#
+# Rounds within a run are not independent samples, so comparisons interleave the
+# variants inside each block and alternate their order between blocks.
+
+schema      = 1
+name        = "crosscache-bench"
+description = "measure how often the shared cross-cache placement lands, judged by reading the placed page as root; an instrument, not an exploit."
+default     = false
+
+# No handoff: this produces a number, not a capability.
+stages = []
+
+[entry]
+"android14-6.1" = "bench.crosscache@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

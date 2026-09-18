@@ -1,0 +1,58 @@
+# The bench monitor's own knobs, shared by every bench.ghostlock-vehicle stage
+# (cves/cve-2026-43499-ghostlock/vehicle_monitor.c). A stage names this file in
+# `tunables_from` alongside the reclaim-vehicle selector, so a knob means the
+# same thing on every target -- which is the basis for comparing two devices'
+# runs at all.
+#
+# Most of these tune the OBSERVATION and change nothing the payload does.
+# MONITOR_ARM decides whether the instrument watches a disarmed landing rehearsal
+# or the real race. The rehearsal changes route timing and is not comparable.
+#
+# MONITOR_PROBES is NOT declared here, because a tunable may only be an enum,
+# an int or a bool (ARCH-G9-TUNABLE) and a probe list is a string. It is read
+# from the monitor's environment, so it applies to a hand-run monitor:
+#   adb shell su -c 'MONITOR_PROBES=rt_mutex_adjust_prio_chain+0x104,... \
+#       /data/local/tmp/ghostlock-vehicle-monitor run - 180'
+# The default set is six symbols that exist on every interface this runs on:
+# futex_requeue, __rt_mutex_start_proxy_lock, rt_mutex_adjust_pi,
+# rt_mutex_adjust_prio_chain, rt_mutex_setprio, rt_mutex_cleanup_proxy_lock.
+[tunables]
+# The one knob here that changes what happens to the kernel, not just what is
+# watched. Off, the consumer never fires: the vehicle still writes its overlay,
+# the waiters still classify, and rt_mutex_adjust_prio_chain is never reached
+# through the consumer -- the run answers whether the overlay LANDS. On, this is
+# the real race with an observer attached, which is the only way to ask what the
+# WALK does with an overlay already proven good, and the kernel can go down.
+# Which set of walk probes to arm. 0 is the six symbols every interface has;
+# 1 is the narrow set a target states for its own build (MONITOR_PROBES_WALK),
+# whose points sit past each gate the walk must clear, so the counts say how
+# far a walk got rather than only that one happened. A target that states no
+# such set ignores this.
+MONITOR_PROBE_SET = { type = "int", min = 0, max = 5, help = "0 = the shared six-symbol set; 1 = this target's narrow walk bisect; 2 = its entry-gate split; 3 = which deadlock the trigger produced; 4 = the requeue section rung by rung; 5 = disable execute probes" }
+MONITOR_PASSIVE = { type = "bool", help = "skip repeated task scans, execute probes and hardware watchpoints; take one endpoint scan after the payload exits or the observation ends (default on for route comparisons)" }
+# Microseconds between samples of the forged table, the write target and the
+# walk counts. The instrument shares a machine with the race it watches, so a
+# run that suspects the observation can widen this or switch it off with 0.
+MONITOR_SAMPLE_US = { type = "int", min = 0, max = 1000000, help = "sampler cadence in us; default 0 disables repeated kernel reads and log drains" }
+# The two watchpoints on the freed slot. They cover a kernel stack depth the
+# waiting thread reuses on every syscall, so they trap hundreds to thousands of
+# times a second, in arbitrary kernel context. Off keeps the execute probes and
+# the content scan, which is how a run separates what the target does from what
+# watching it does.
+MONITOR_WATCH_SLOT = { type = "bool", help = "arm read/write watchpoints on the freed waiter slot (default off for lower observer overhead)" }
+MONITOR_ARM = { type = "bool", help = "fire the real consumer and let the walk reach the write (default ON). MONITOR_ARM=0 runs a disarmed landing rehearsal that changes route timing and is not performance-comparable" }
+MONITOR_SECONDS = { type = "int", min = 45, max = 220, help = "duration of the armed observation in seconds (default 180; allow runner shot-timeout headroom)" }
+MONITOR_PACE_MS = { type = "int", min = 20, max = 60000, help = "milliseconds between waiter scans and ring-buffer drains in instrumented mode (default 1000)" }
+MONITOR_COMPACT = { type = "bool", help = "drive /proc/sys/vm/compact_memory during observation (default off to preserve the payload's allocator conditions; on isolates placement)" }
+MONITOR_WEDGE_REBOOT = { type = "bool", help = "reset a device whose teardown walk wedged the kernel via sysrq instead of waiting out the vendor watchdog; the run's result is already synced to flash before the teardown that causes it, so this only buys back the dead minutes. Default adapts: on where the kernel has no softlockup detector to self-panic a spin (it cannot recover otherwise), off where it does; set explicitly to override" }
+# The processor's watchpoint registers can also record the kernel call chain at
+# each access, not just the accessing PC. Off by default: a call chain on every
+# access to a reused address fills the ring far faster, so it is asked for when
+# the path the walk took to the slot is the question.
+MONITOR_WATCH_TRACE = { type = "bool", help = "record and print the kernel call chain (symbolized) at each walk read of the slot, a bounded number of distinct ones; default off (reports the reading PC only)" }
+MONITOR_WATCH_STACK = { type = "int", min = 1, max = 200, help = "call-chain depth to capture when MONITOR_WATCH_TRACE is on (default 24)" }
+MONITOR_WATCH_TRACE_MAX = { type = "int", min = 1, max = 1000, help = "how many distinct walk-read backtraces to print when MONITOR_WATCH_TRACE is on (default 8)" }
+# Only threads holding a dangling waiter are printed; the rest of a process's
+# threads carry nothing this instrument is about. This one adds their raw stack
+# bytes back for a hand inspection.
+MONITOR_DUMP_STACK = { type = "bool", help = "also dump the raw kernel-stack bytes of each sleeping waiter thread (default off); off keeps the log to the waiter classification and the hardware watch" }

@@ -1,8 +1,7 @@
 # handoff.suhelper — the su daemon / root helper binary.
 #
 # Target-independent: cves/cve-2026-43499-ghostlock/su_daemon.c references no
-# target.h macro, so all 19
-# targets produce one cve-2026-43499-root.
+# target.h macro, so every target produces one cve-2026-43499-root.
 #
 # The output name carries CVE-2026-43499; the helper itself is CVE-independent.
 
