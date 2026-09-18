@@ -1,0 +1,139 @@
+{
+  "comment": "What is known about each vulnerability this repository exploits, and about which kernels still carry it. Read by runner/scripts/lib/vuln_status.py, which deduces a verdict for a device rather than consulting an allow-list: a fix has a moment it came into existence, everything built before that moment carries the bug, and nothing built after it can be assumed to. Verdicts recorded here were read out of the kernel's own source; the deduction only ever extends them backwards.",
+  "schema": 1,
+  "cves": {
+    "CVE-2026-43049": {
+      "chain": "ffwheel",
+      "summary": "hidpp_probe() leaks an input_dev when force-feedback init fails",
+      "fix": {
+        "authored": "2026-02-27",
+        "upstream": "f7a4c78bfeb320299c1b641500fe7761eadbd101",
+        "ack": {
+          "committed": "2026-03-23",
+          "shas": [
+            "20130e92480a",
+            "0e9b1ff406b1"
+          ]
+        },
+        "marker": {
+          "path": "drivers/hid/hid-logitech-hidpp.c",
+          "within": "HIDPP_QUIRK_CLASS_G920) {",
+          "lines_after": 6,
+          "fixed_when_present": "ret = 0;"
+        },
+        "references": [
+          "https://git.kernel.org/linus/f7a4c78bfeb320299c1b641500fe7761eadbd101",
+          "https://android.googlesource.com/kernel/common/+/20130e92480a",
+          "https://app.opencve.io/cve/CVE-2026-43049"
+        ]
+      },
+      "kernels": {
+        "6.1.145-android14-11-gfa1d6308d1fe-ab14691759": {
+          "verdict": "vulnerable",
+          "checked": "2026-09-19",
+          "method": "source"
+        },
+        "6.1.157-android14-11-gbd23337e42e7-ab14791245": {
+          "verdict": "vulnerable",
+          "checked": "2026-09-19",
+          "method": "source"
+        },
+        "6.6.118-android15-8-g53e6e091166e-ab15266607-4k": {
+          "verdict": "fixed",
+          "checked": "2026-09-19",
+          "method": "source"
+        },
+        "6.1.162-android14-11-g2ec90535fa34-ab15810641": {
+          "verdict": "fixed",
+          "checked": "2026-09-19",
+          "method": "source"
+        }
+      }
+    },
+    "CVE-2026-43499": {
+      "chain": "ghostlock",
+      "summary": "remove_waiter() operates on current rather than waiter::task, leaving pi_blocked_on dangling",
+      "fix": {
+        "authored": "2026-04-08",
+        "upstream": "3bfdc63936dd4773109b7b8c280c0f3b5ae7d349",
+        "ack": {
+          "committed": null,
+          "shas": []
+        },
+        "marker": {
+          "path": "kernel/locking/rtmutex.c",
+          "function": "remove_waiter(struct rt_mutex_base",
+          "fixed_when_present": "waiter_task"
+        },
+        "references": [
+          "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/commit/?id=3bfdc63936dd4773109b7b8c280c0f3b5ae7d349",
+          "https://ratatoskr.run/linux-cve-announce/2026/05/17014263",
+          "https://app.opencve.io/cve/CVE-2026-43499"
+        ]
+      },
+      "kernels": {
+        "6.1.145-android14-11-gfa1d6308d1fe-ab14691759": {
+          "verdict": "vulnerable",
+          "checked": "2026-09-19",
+          "method": "source"
+        },
+        "6.1.157-android14-11-gbd23337e42e7-ab14791245": {
+          "verdict": "vulnerable",
+          "checked": "2026-09-19",
+          "method": "source"
+        },
+        "6.6.118-android15-8-g53e6e091166e-ab15266607-4k": {
+          "verdict": "vulnerable",
+          "checked": "2026-09-19",
+          "method": "source"
+        },
+        "6.1.162-android14-11-g2ec90535fa34-ab15810641": {
+          "verdict": "fixed",
+          "checked": "2026-09-19",
+          "method": "source"
+        }
+      }
+    },
+    "CVE-2026-93189": {
+      "chain": "joyride",
+      "summary": "hid_hw_stop() unwinds a failed probe without quiescing input, so hidraw_disconnect() frees struct hidraw under an in-flight hidraw_report_event()",
+      "fix": {
+        "authored": "2026-05-19",
+        "upstream": "a4bc41504690b7d7064931909874f5b98cd148b6",
+        "marker": {
+          "path": "drivers/hid/hid-core.c",
+          "within": "void hid_hw_stop(struct hid_device *hdev)",
+          "lines_after": 5,
+          "fixed_when_present": "hid_device_io_stop(hdev);"
+        },
+        "references": [
+          "https://git.kernel.org/linus/a4bc41504690b7d7064931909874f5b98cd148b6",
+          "https://git.kernel.org/stable/c/6787f1828f5616f17250e108c0031fb96fd2cfe6",
+          "https://ratatoskr.run/linux-cve-announce/2026/09/17596796"
+        ]
+      },
+      "kernels": {
+        "6.1.145-android14-11-gfa1d6308d1fe-ab14691759": {
+          "verdict": "vulnerable",
+          "checked": "2026-09-19",
+          "method": "source"
+        },
+        "6.1.157-android14-11-gbd23337e42e7-ab14791245": {
+          "verdict": "vulnerable",
+          "checked": "2026-09-19",
+          "method": "source"
+        },
+        "6.6.118-android15-8-g53e6e091166e-ab15266607-4k": {
+          "verdict": "vulnerable",
+          "checked": "2026-09-19",
+          "method": "source"
+        },
+        "6.1.162-android14-11-g2ec90535fa34-ab15810641": {
+          "verdict": "vulnerable",
+          "checked": "2026-09-19",
+          "method": "source"
+        }
+      }
+    }
+  }
+}

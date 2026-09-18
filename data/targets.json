@@ -1,0 +1,182 @@
+{
+  "comment": "Kernel-offset-driven exploit selection. One payload per unique offset group; many Pixel devices share a group.  Ship payload file names follow the same shape as every other artifact: cve-<id>-<chain>-<what distinguishes this build>.",
+  "devices": [
+    {
+      "codename": "akita",
+      "build": "CP2A.260805.005",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/akita/akita:17/CP2A.260805.005/15828068:user/release-keys"
+    },
+    {
+      "codename": "blazer",
+      "build": "CP2A.260705.006",
+      "kernel": "6.6.118-android15-8-g53e6e091166e-ab15266607-4k",
+      "kmi": "android15-6.6",
+      "payload": "android15-6.6",
+      "fingerprint": "google/blazer/blazer:17/CP2A.260705.006/15430684:user/release-keys"
+    },
+    {
+      "codename": "bluejay",
+      "build": "CP1A.260405.005",
+      "kernel": "6.1.145-android14-11-gfa1d6308d1fe-ab14691759",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1-ab14691759",
+      "fingerprint": "google/bluejay/bluejay:16/CP1A.260405.005/15001963:user/release-keys"
+    },
+    {
+      "codename": "bluejay",
+      "build": "CP2A.260705.006",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/bluejay/bluejay:17/CP2A.260705.006/15641320:user/release-keys"
+    },
+    {
+      "codename": "caiman",
+      "build": "CP2A.260705.006",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/caiman/caiman:17/CP2A.260705.006/15430684:user/release-keys"
+    },
+    {
+      "codename": "caiman",
+      "build": "CP2A.260805.005",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/caiman/caiman:17/CP2A.260805.005/15828068:user/release-keys"
+    },
+    {
+      "codename": "cheetah",
+      "build": "CP2A.260705.006",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/cheetah/cheetah:17/CP2A.260705.006/15641320:user/release-keys"
+    },
+    {
+      "codename": "comet",
+      "build": "CP2A.260705.006",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/comet/comet:17/CP2A.260705.006/15430684:user/release-keys"
+    },
+    {
+      "codename": "frankel",
+      "build": "CP2A.260705.006",
+      "kernel": "6.6.118-android15-8-g53e6e091166e-ab15266607-4k",
+      "kmi": "android15-6.6",
+      "payload": "android15-6.6",
+      "fingerprint": "google/frankel/frankel:17/CP2A.260705.006/15641320:user/release-keys"
+    },
+    {
+      "codename": "husky",
+      "build": "CP2A.260705.006",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/husky/husky:17/CP2A.260705.006/15641320:user/release-keys"
+    },
+    {
+      "codename": "komodo",
+      "build": "CP2A.260705.006",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/komodo/komodo:17/CP2A.260705.006/15641320:user/release-keys"
+    },
+    {
+      "codename": "lynx",
+      "build": "CP2A.260705.006",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/lynx/lynx:17/CP2A.260705.006/15641320:user/release-keys"
+    },
+    {
+      "codename": "mustang",
+      "build": "CP2A.260705.006",
+      "kernel": "6.6.118-android15-8-g53e6e091166e-ab15266607-4k",
+      "kmi": "android15-6.6",
+      "payload": "android15-6.6",
+      "fingerprint": "google/mustang/mustang:17/CP2A.260705.006/15641320:user/release-keys"
+    },
+    {
+      "codename": "oriole",
+      "build": "CP2A.260705.006",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/oriole/oriole:17/CP2A.260705.006/15641320:user/release-keys"
+    },
+    {
+      "codename": "panther",
+      "build": "CP2A.260705.006",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/panther/panther:17/CP2A.260705.006/15641320:user/release-keys"
+    },
+    {
+      "codename": "rango",
+      "build": "CP2A.260705.006",
+      "kernel": "6.6.118-android15-8-g53e6e091166e-ab15266607-4k",
+      "kmi": "android15-6.6",
+      "payload": "android15-6.6",
+      "fingerprint": "google/rango/rango:17/CP2A.260705.006/15430684:user/release-keys"
+    },
+    {
+      "codename": "raven",
+      "build": "CP2A.260705.006",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/raven/raven:17/CP2A.260705.006/15641320:user/release-keys"
+    },
+    {
+      "codename": "shiba",
+      "build": "CP2A.260705.006",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/shiba/shiba:17/CP2A.260705.006/15641320:user/release-keys"
+    },
+    {
+      "codename": "tegu",
+      "build": "CP2A.260705.006",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/tegu/tegu:17/CP2A.260705.006/15641320:user/release-keys"
+    },
+    {
+      "codename": "tokay",
+      "build": "CP2A.260705.006",
+      "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245",
+      "kmi": "android14-6.1",
+      "payload": "android14-6.1",
+      "fingerprint": "google/tokay/tokay:17/CP2A.260705.006/15641320:user/release-keys"
+    }
+  ],
+  "payloads": {
+    "android14-6.1": {
+      "kmi": "android14-6.1",
+      "build_from": "bluejay-CP2A.260705.006",
+      "file": "cve-2026-43499-ghostlock-android14-6.1.so"
+    },
+    "android15-6.6": {
+      "kmi": "android15-6.6",
+      "build_from": "blazer-CP2A.260705.006",
+      "file": "cve-2026-43499-ghostlock-android15-6.6.so"
+    },
+    "android14-6.1-ab14691759": {
+      "kmi": "android14-6.1",
+      "build_from": "bluejay-CP1A.260405.005",
+      "file": "cve-2026-43499-ghostlock-android14-6.1-ab14691759.so"
+    }
+  }
+}
