@@ -1,0 +1,180 @@
+# bench.crosscache@6.1 — how often the shared cross-cache placement lands.
+#
+# Several chains take a page from one allocator cache and refill it from
+# another through one shared implementation, so its landing rate is a property
+# they all inherit.
+#
+# The chains are blind to their own placements: the bytes go to an address a
+# groom named, and the first sign of a miss is a later step failing for reasons
+# nothing can attribute. Checking one with a chain's own read costs a won race
+# per sample, which this target budgets at hundreds of attempts.
+#
+# A privileged run reads the page instead: ground truth rather than an inference
+# through an exploit primitive, no race, no attempt budget, nothing to restore.
+# A sample costs one groom.
+#
+# Root is used only to observe, and no CVE is linked, so nothing about one chain
+# can flatter or spoil the number.
+
+schema = 1
+kind   = "entry"
+id     = "bench.crosscache@6.1"
+cve    = ""                        # measures a shared primitive, not a vulnerability
+kmi    = ["android14-6.1"]
+targets = ["panther-CP2A.260705.006"]
+
+composed = false
+status   = "instrument, not an exploit: measures how often the shared cross-cache placement lands, judged by reading the placed page as root. Arms nothing and reaches no capability."
+
+[build]
+form    = "static-exe"
+entry   = "main"
+# The harness and the shared placement. No CVE is linked: what is measured is a
+# library primitive, so nothing about one chain can flatter or spoil the number.
+sources = ["cves/bench/crosscache.c",
+           "cves/lib/rw/kprobe_read.c",
+           "cves/lib/spray/crosscache/crosscache.c",
+           "cves/lib/spray/sockpool.c",
+           "cves/lib/leak/futex_scan.c"]
+includes = ["cves"]
+depends  = []
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "bench-crosscache"
+uses_target_header = true
+
+[facts]
+header    = "cves/targets/{target}/cve64560.h"
+generator = "runner/scripts/gen-cve64560-offsets.py"
+# None. The bench resolves no kernel symbol: it judges a page by the address the
+# page itself carries, and takes the object geometry from the target header.
+requires = []
+forbids  = []
+
+[properties]
+retry_safe  = true
+# Nothing is armed, no race is run and no kernel pointer is made to point at
+# anything the bench allocates. What remains is an allocation-heavy process.
+panic_risk  = { pre_slide = "low", post_slide = "low" }
+# The pages are released as they are judged, and nothing ever named them.
+destructive = []
+restores    = []
+provides      = []
+requires_caps = ["CAP_SU"]
+retains       = []
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/crosscache-bench"
+mode = "755"
+# Not a method comparison -- pipe-bare is dropped, `stream` is the one
+# reclaim path GhostLock and FFWheel actually use. This compares a real,
+# verified fix (CPU-pinned leak+refill) against a plain baseline. It does NOT
+# compare SLUBStick and PCP-massaging against each other; see the two
+# measurement tools below for that. The padding-spray config
+# (CROSSCACHE_CFG_PANTHER_61's mm_partials/pipe_drain_slabs/
+# pipe_reclaim_slabs) is held constant across both arms, since it is separate
+# and not what this run measures:
+#
+#   baseline  -- CC_LEAK_PIN=0. The leak child is unpinned.
+#   pinned    -- CC_LEAK_PIN=1. The leak child is pinned to cc_pin(cc_cfg.core),
+#                the same CPU the refill pins to -- not PCP-massaging's own
+#                technique, which is a probe-and-drain-and-refill sequence
+#                against the per-CPU pageset that this does not attempt.
+#                Every other decoy child in this same groom pins itself; the
+#                leak child alone does not.
+#
+# Two further tools exist as MEASUREMENTS, not gates -- each one's own
+# parameters are exactly what is worth sweeping to see whether either
+# technique can be made to help this reclaim, rather than assuming a single
+# run settles it:
+#
+#   --calibrate-signal N   (SLUBStick, isec-tugraz/SLUBStick) -- grows a real
+#     spray of N held-open sockets while re-timing one reused probe with a
+#     cycle counter every iteration, and prints the raw consecutive-delta
+#     series. No root needed (pure userspace timing). Worth sweeping: N (their
+#     own tool used 8192; this device may show a boundary at a very different
+#     count), and reading the output for where |derived| jumps -- that index,
+#     if one exists, is this device's own signal, not a value to assume.
+#
+#   --pcp-trial N --pcp-order O --pcp-spray-n S   (PCP-massaging,
+#     Migliorelli et al. NDSS 2026, ported from x0prc/PCP-LOST) -- N pages of
+#     order O, freed, groomed (repeated alloc/measure/free against real PFNs,
+#     since this runs privileged and needs no timing guess), an unrelated
+#     spray of S, then re-measured for PFN overlap against the original N.
+#     Needs root (real PFNs, same as this bench's own judge). Worth sweeping:
+#     N (their own trial used 64), O (0 matches their experiment exactly; 3
+#     matches `stream`'s own order, the further question of whether the
+#     finding transfers to what this bench otherwise measures), and S.
+#
+# Neither is wired into the rounds/rate table above; each prints its own
+# result and exits. The default command below stays the CPU-pin comparison,
+# since that is the one verified, already-applied fix; run the two tools
+# above by hand once there is a reason to believe a particular N/O/S is worth
+# trying, not by guessing one into the default command.
+command = "cd @DEV_TMP@; { echo === baseline leak child unpinned ===; CC_LEAK_PIN=0 @DEV_ENTRY@ --rounds 20 --method stream --nspray 64; echo === pinned free and refill on the same CPU ===; CC_LEAK_PIN=1 @DEV_ENTRY@ --rounds 20 --method stream --nspray 64; } > @DEV_LOG@ 2>&1"
+# For a different round count or nspray, or to run either tool above: invoke
+# the binary this recipe already pushed (/data/local/tmp/crosscache-bench)
+# directly, after one recipe run has put it on the device, e.g.:
+#   adb shell CC_LEAK_PIN=0 /data/local/tmp/crosscache-bench --rounds 30 --method stream --nspray 64
+#   adb shell CC_LEAK_PIN=1 /data/local/tmp/crosscache-bench --rounds 30 --method stream --nspray 64
+#   adb shell /data/local/tmp/crosscache-bench --calibrate-signal 2048
+#   adb shell /data/local/tmp/crosscache-bench --pcp-trial 64 --pcp-order 3 --pcp-spray-n 500
+#   adb shell /data/local/tmp/crosscache-bench --pspray-calibrate 8192
+# --precede-leak 1 (default 0): before every round's own placement, runs an
+# UNRELATED KernelSnitch leak against the identical mm_struct/order-3 class
+# (the exact call cves/cve-2026-43049-ffwheel/ksnitch_mm.h's leak_own_mm()
+# makes) in the same process -- what the FFWheel reader's confirm-before-fire
+# oracle actually does (resolve its own mm, then place a crosscache forge).
+# Compare a run with the flag against one without, same method/nspray/rounds,
+# and diff the `rate` columns; that is the whole test.
+# Needs the same root-on-this-boot precondition the recipe's own setup check
+# requires either way; see this stage's [[setup]] below.
+# The bench composes no kernel address of its own; the payload's symbols are
+# inert bytes here, because what is measured is which page an allocation takes.
+accepts_base = false
+# Root is the judge, never the method: it reads the placed page and nothing else.
+needs_root = true
+
+[markers]
+# Printed only when at least one round reached a verdict. The totals line is
+# always printed, so scoring on it would call a run that learned nothing a pass.
+pass = 'CROSSCACHE_BENCH_JUDGED rounds=[0-9]+'
+gate_fail = 'BENCH_GATE_FAIL'
+# The measurement itself, so the answer reaches whoever started the run rather
+# than only the archived log.
+diag = '(RESULT method=.*|CROSSCACHE_BENCH_TOTAL .*)'
+diag_count = 'landed=[0-9]+'
+
+# 2 the privileged read or the processor roles were unavailable, so nothing
+# could be judged; 3 every round failed to produce a verdict.
+[exit_map]
+"0" = "PASS"
+"2" = "PRECONDITION_FAIL"
+"3" = "REFUSED"
+
+[provides]
+caps  = []
+field = ''
+label = ""
+
+# Deliberately no reboot.
+#
+# This stage borrows an su left behind by a baseline root earlier on the same
+# boot. A reboot would destroy the precondition it needs, which is why the check
+# below runs as a setup step: with no su present, the run is abandoned before it
+# spends a boot, and the operator is told what to run first.
+#
+# A quiet allocator still matters, and it comes for free: the root route reboots
+# for a fresh boot of its own, so this runs on a boot that is both freshly
+# started and freshly rooted.
+[[setup]]
+# The runner prints a step's description when it has one and the raw shell
+# otherwise, so every setup step states what it is for rather than how.
+description = "confirm the su this borrows is present, and say which boot it belongs to"
+command = "echo root uid=$(id -u) up=$(cut -d. -f1 /proc/uptime)s"
+needs_root = true
+once_per_boot = true

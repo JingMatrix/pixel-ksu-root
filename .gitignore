@@ -45,5 +45,10 @@ scratch_verify/
 # Working notes and analysis; not part of the deliverable.
 docs/
 
+# tools/cve-monitor fetch cache and last report; regenerate, don't track.
+# Unverified feed data belongs here, never in data/vulns.json.
+tools/cve-monitor/state.json
+tools/cve-monitor/report.json
+
 # Local working notes; not part of the deliverable.
 *.local.md

@@ -223,6 +223,19 @@ def _source_at(krel, path):
         return None
 
 
+def probe_file(krel, path, marker=None):
+    """Read a file out of one kernel's exact commit, with no data/vulns.json
+    entry required. For a candidate CVE that isn't recorded yet: does the file
+    its fix touches even exist on this build, and if a marker is given, is the
+    fix in it? Returns (exists, verdict_or_None)."""
+    src = _source_at(krel, path)
+    if src is None:
+        return False, None
+    if marker is None:
+        return True, None
+    return True, (FIXED if _marker_present(src, marker) else VULNERABLE)
+
+
 def _marker_present(src, mark):
     """Is the fix in this source? The marker names a region and a string that
     only a fixed tree has there."""
