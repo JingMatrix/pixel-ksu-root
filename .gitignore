@@ -10,20 +10,12 @@ cves/build/
 logs/
 *.log
 
-# Keep the exploit source and target table tracked
+# Keep the exploit source tracked
 !cves/
-!data/targets.json
 
-# Harvested device blobs — regenerate with runner/scripts/harvest-live.sh
-data/live/*/Image
-data/live/*/btf-vmlinux
-data/live/*/kallsyms.txt
-data/live/*/dmesg.txt
-
-# tools/pixel-image/derive_offsets.py output, redirected here while working --
-# superseded by the committed cves/targets/kernel/*.h it feeds; regenerate with
-# the same command rather than track the scratch copy.
-data/live/*/derived-offsets.h
+# Local runtime state: harvested device blobs (runner/scripts/harvest-live.sh),
+# the derived target/vuln tables, and panic archives. Regenerate, don't track.
+data/
 
 __pycache__/
 
@@ -45,5 +37,12 @@ scratch_verify/
 # Working notes and analysis; not part of the deliverable.
 docs/
 
+# tools/cve-monitor fetch cache and last report; regenerate, don't track.
+tools/cve-monitor/state.json
+tools/cve-monitor/report.json
+
 # Local working notes; not part of the deliverable.
 *.local.md
+
+# Export exploits
+export

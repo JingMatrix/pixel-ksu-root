@@ -1,0 +1,182 @@
+# bench.ghostlock-vehicle@6.1 -- watch a real GhostLock reclaim vehicle land
+# (or not) on panther (Pixel 7, Linux 6.1.157-android14), from outside, on a
+# boot that already has root.
+#
+# The real exploit .so runs unmodified through cve-helper --run-payload.
+#
+# The race is ARMED by default: the consumer's sched_setattr fires and the walk
+# reaches the write -- the same race a root run would run, watched from outside,
+# which can take the kernel down. `--tunable MONITOR_ARM=0` is a disarmed landing
+# rehearsal with altered route timing; use armed mode for performance comparisons.
+# The armed mode preserves the payload's selected vehicle and route tunables.
+#
+# HOW IT OBSERVES. The monitor finds the dangling waiter once (a bounded scan
+# for task->pi_blocked_on), then can arm the processor's watchpoint registers on it
+# (cves/lib/trace/hwwatch.h): an optional read watch on the lock field the walk
+# dereferences, a write watch on the task field every placement writes. The
+# when enabled, hardware traps each access and records the accessing kernel PC and the time, so
+# a walk's read and a vehicle's write are each their own dated event -- not a
+# fraction of poll samples. It does not poll the slot. The final HWWATCH line
+# gives writes (placements), reads, walk_reads (reads whose PC is in the walk),
+# and walk_read_after_write (a walk that read a freshly written slot); the sample
+# carries no value, so whether a write was ours comes from the payload's log.
+#
+# WALK PROBES. When enabled, the monitor arms hardware execute breakpoints
+# (cves/lib/trace/hwbp.h, the same counters tools/hwbp uses) on the
+# priority-inheritance path and reports their counts in a WALK PROBES line at the
+# end: futex_requeue, __rt_mutex_start_proxy_lock, rt_mutex_adjust_pi,
+# rt_mutex_adjust_prio_chain, rt_mutex_setprio, rt_mutex_cleanup_proxy_lock. They
+# say whether the kernel walked at all; the watch says what it read. The counts
+# are system-wide. MONITOR_PROBES (env, hand-run) replaces the set with any
+# symbol[+0xOFF] list, for a narrower bisect.
+#
+# The endpoint content scan -- find every process sharing the payload's cmdline,
+# walk each thread_group, classify the waiter, print the VERDICT -- is the shared
+# code in cves/lib/rtmutex/waiter_scan.h. A target with no usable kprobe read
+# needs only ONE thing changed, the kernel-read primitive under that scan: a
+# kprobe/tracefs read here, a BPF perf-event read there. That is what makes
+# runs on either primitive comparable, which is the only reason this
+# instrument exists.
+#
+# The default run uses passive observation: it tails payload output and scans
+# once at the endpoint, keeping task scans and watchpoints out of route timing.
+# Set MONITOR_PASSIVE=0 for instrumented observation. The default window is 180
+# seconds; repeated sampling, probes, slot watchpoints, and external compaction
+# are off. MONITOR_PACE_MS controls scans and ring-buffer drains in instrumented
+# mode.
+
+schema = 1
+kind   = "entry"
+id     = "bench.ghostlock-vehicle@6.1"
+cve    = "CVE-2026-43499"
+kmi    = ["android14-6.1"]
+targets = ["panther-CP2A.260705.006"]
+
+composed = false
+status   = "instrument: runs the GhostLock payload with the same launch identity, vehicle, and route tunables as the root recipe in armed mode. Passive observation tails payload output and scans once at the endpoint to limit observer overhead. MONITOR_PASSIVE=0 enables repeated task scans and hardware instrumentation. MONITOR_ARM=0 changes route timing and is not comparable. Teardown can wedge or reboot the device."
+
+# The selector entry.ghostlock@6.1 shares (see resolve-recipe.py:
+# merge_shared_tunables()), plus the per-vehicle race knobs. An armed run leaves
+# every route knob at the payload's own default, so it is the same race a real
+# root run runs; a --tunable reaches the payload untouched, for sweeping how long
+# the vehicle holds the overlay, how hard the consumer hammers, or the delay
+# before it fires. Only a disarmed run overrides the arm sequence (to keep the
+# consumer from ever firing).
+tunables_from = ["runner/stages/_shared/ghostlock-vehicle-select.toml",
+                 "runner/stages/_shared/ghostlock-vehicle-monitor.toml",
+                 "runner/stages/_shared/ghostlock-vehicle-knobs.toml"]
+
+[build]
+form    = "static-exe"
+entry   = "main"
+sources = ["cves/cve-2026-43499-ghostlock/vehicle_monitor.c",
+           "cves/lib/rw/kprobe_read.c"]
+includes = ["cves"]
+# This field is source/header rebuild tracking, not a stage dependency: the
+# payload and helper this stage's own command execs are a runtime precondition,
+# stated by runner/recipes/ghostlock-vehicle-bench.toml.
+depends  = []
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "ghostlock-vehicle-monitor"
+uses_target_header = true
+
+[facts]
+# None: init_task comes from /proc/kallsyms at run time; the layout facts
+# come from the target header.
+header    = ""
+generator = ""
+requires  = []
+forbids   = []
+
+[properties]
+retry_safe  = true
+# The route is the real one with its arming condition gated off
+# unconditionally; see this file's header.
+# Disarmed the observation is low risk; armed (MONITOR_ARM=1) the walk can
+# reach the write and fault like any real shot.
+panic_risk  = { pre_slide = "low", post_slide = "high" }
+destructive = []
+restores    = []
+provides      = []
+requires_caps = ["CAP_SU"]
+retains       = []
+
+[markers]
+# Printed after the observation and endpoint report complete. PASS means the
+# monitor completed its measurement; the diag is the race result, not root.
+pass = 'vehicle_monitor: watched=[0-9]+s reads=[0-9]+ .*loader_reaped=[01]'
+gate_fail = 'vehicle_monitor: (must run as root|never observed a live worker process|could not resolve init_task|could not open the .* kernel read|pselect carries no arming gate)'
+# The one inference line, printed identically on every target by
+# lib_waiter_tally_print() (cves/lib/rtmutex/waiter_scan.h), so two devices'
+# runs are read the same way:
+#   forged     the overlay won the freed slot -- reclaim and vehicle both work
+#   erase_safe among those, rb_erase would not dereference a stale parent
+#   gate_early among those, rt_mutex_adjust_pi returns before the chain, so no
+#              write happens however right everything else is
+#   foreign    a different object won the slot -- the placement is missing
+#   midcopy    the endpoint scan caught the copy_from_user pre-write window
+#   unmapped   pi_blocked_on pointed somewhere unreadable
+# All-zero with waiter_passes=0 is a statement about the instrument, not the
+# target: nothing was observed. Check the payload's own step markers
+# (payload-start -> kaslr-done -> spray-ok -> route-enter) in the same log.
+# The shot headline (index.tsv summary + run-log line). The HWWATCH line is the
+# hardware result and prints last, so it wins; the VERDICT alternative covers a
+# run that found no waiter to watch. A shot that panicked before either matches
+# its tail instead.
+diag = 'vehicle_monitor: (HWWATCH waiter=|VERDICT ).*'
+# One per classified dangling waiter -- the count of landing observations.
+diag_count = 'waiter pi_blocked_on='
+
+[exit_map]
+"0" = "PASS"
+"1" = "PRECONDITION_FAIL"
+"2" = "PRECONDITION_FAIL"
+
+[provides]
+caps  = []
+field = ''
+label = ""
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/ghostlock-vehicle-monitor"
+mode = "755"
+# The monitor needs root itself (the kernel read it drives).
+needs_root = true
+# It forks cve-helper --run-payload exploit-payload.so, so the runner stages
+# the freshly built payload and helper before the run (else a payload edit
+# would never reach the device).
+needs_payload = true
+# @KASLR_ENV@ is used below (it is the only place RECLAIM_VEHICLE actually
+# reaches the device), and the gate requires this stage to say explicitly
+# whether it can also be replayed with a cached KASLR_BASE from an earlier
+# boot -- yes: the forked cve-helper child inherits whatever @KASLR_ENV@
+# sets, base included, and the real payload's own KASLR replay logic
+# handles a supplied base exactly as it would in a real shot. The base line
+# the runner's leak-only shot reads back out of @DEV_LOG@ is the payload's
+# own: run_and_watch() copies the payload's log file to its stdout before
+# returning. The payload keeps a log file of its own rather than writing to
+# @DEV_LOG@ because payload_runner_main() opens that path O_TRUNC
+# (su_daemon.c) and would truncate the file this stage's own redirect is
+# already writing. A leak-only payload exits as soon as it has printed the
+# base; if that happens before the monitor resolves its task, the monitor
+# prints its own gate_fail line and classify_shot() ranks the shot
+# PRECONDITION_FAIL.
+accepts_base = true
+# The numeric arg is the number of SECONDS to watch, the same unit every
+# bench.ghostlock-vehicle stage passes. It has to outlast the payload's own approach to the route --
+# the cross-cache groom alone costs seconds and the waiter this instrument
+# classifies does not exist before it -- or the monitor kills a payload that
+# never sprayed and reports zero waiters as though there were none.
+command = "@KASLR_ENV@@DEV_ENTRY@ run - \"${MONITOR_SECONDS:-180}\" > @DEV_LOG@ 2>&1"
+
+# No [[setup]] step. This stage borrows an su left behind by a baseline root
+# earlier on the SAME boot, and a reboot would destroy it -- but stating that as
+# a step buys nothing: the invoke above declares needs_root, so setup_precheck()
+# abandons a run with no su before it spends any device time either way, and
+# what a step could print is already in the run log or in the monitor's own
+# opening lines.
