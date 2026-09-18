@@ -1,0 +1,21 @@
+# The reclaim-vehicle SELECTOR: the one tunable and the one runner-supplied
+# set every GhostLock (CVE-2026-43499) entry stage shares, regardless of how
+# many vehicles its own build actually implements. runner/scripts/resolve-
+# recipe.py's merge_shared_tunables() pulls this [tunables] table into a
+# stage that names it via `tunables_from`.
+#
+# RECLAIM_VEHICLE resolves against whichever table a build actually compiled
+# (struct lib_reclaim_vehicle, cves/lib/rtmutex/reclaim_vehicle.h) -- naming
+# a vehicle that table does not hold, or one whose own precondition check
+# refuses it, is a clean runtime RECLAIM_GATE_FAIL, not a build-time
+# omission, so this file makes no claim about which names actually work on
+# a given interface. The vehicle table itself is one unconditional array of
+# seven rows, compiled and reachable identically on every interface
+# (util_config.c) -- tcp-zc's, sigreturn's, clone3's, process-vm's, bpf's and mcast's
+# own tuning knobs (attempts, delays, byte offsets) are
+# ghostlock-vehicle-knobs.toml, pulled in ADDITIONALLY by every stage.
+[tunables]
+RECLAIM_VEHICLE = { type = "enum", values = ["pselect", "tcp-zc", "sigreturn", "clone3", "process-vm", "bpf", "mcast", "sockopt"], help = "which syscall re-occupies the freed rt_mutex_waiter frame; unset derives one (cve-2026-43499-ghostlock/util_config.c:derive_reclaim_vehicle())" }
+
+runner_supplied = ["KASLR_BASE", "KASLR_LEAK_ONLY", "SU_CLIENT_UID",
+                   "SU_APP_UID", "CVE43499_ROOT_HELPER"]

