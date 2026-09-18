@@ -17,7 +17,7 @@
         },
         "marker": {
           "path": "drivers/hid/hid-logitech-hidpp.c",
-          "within": "HIDPP_QUIRK_CLASS_G920) {",
+          "within": "ret = hidpp_ff_init(hidpp, &data);",
           "lines_after": 6,
           "fixed_when_present": "ret = 0;"
         },
@@ -94,6 +94,45 @@
         }
       }
     },
+    "CVE-2026-64469": {
+      "chain": "frostwalk",
+      "summary": "binder_free_transaction() reads t->to_proc unlocked while binder_thread_release() walks and writes a different thread's transaction_stack entries under t->lock; a transaction freed by one process's teardown can still be linked on another live thread's stack",
+      "fix": {
+        "authored": "2026-06-19",
+        "upstream": "114a116aaa5f0295376cdf12da743c5bce3b20ce",
+        "ack": {
+          "committed": null,
+          "shas": []
+        },
+        "marker": {
+          "path": "drivers/android/binder.c",
+          "within": "static void binder_free_transaction(struct binder_transaction *t)",
+          "lines_after": 6,
+          "fixed_when_present": "spin_lock(&t->lock)"
+        },
+        "references": [
+          "https://git.kernel.org/linus/114a116aaa5f0295376cdf12da743c5bce3b20ce",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-64469"
+        ]
+      },
+      "kernels": {
+        "6.1.145-android14-11-gfa1d6308d1fe-ab14691759": {
+          "verdict": "vulnerable",
+          "checked": "2026-09-19",
+          "method": "source"
+        },
+        "6.1.157-android14-11-gbd23337e42e7-ab14791245": {
+          "verdict": "vulnerable",
+          "checked": "2026-09-19",
+          "method": "source"
+        },
+        "6.6.118-android15-8-g53e6e091166e-ab15266607-4k": {
+          "verdict": "vulnerable",
+          "checked": "2026-09-19",
+          "method": "source"
+        }
+      }
+    },
     "CVE-2026-93189": {
       "chain": "joyride",
       "summary": "hid_hw_stop() unwinds a failed probe without quiescing input, so hidraw_disconnect() frees struct hidraw under an in-flight hidraw_report_event()",
@@ -129,6 +168,11 @@
           "method": "source"
         },
         "6.1.162-android14-11-g2ec90535fa34-ab15810641": {
+          "verdict": "vulnerable",
+          "checked": "2026-09-19",
+          "method": "source"
+        },
+        "5.10.157-android13-4-00003-g776d0a76f6aa-ab10208116": {
           "verdict": "vulnerable",
           "checked": "2026-09-19",
           "method": "source"

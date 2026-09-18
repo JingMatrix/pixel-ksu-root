@@ -1,0 +1,13 @@
+schema      = 1
+name        = "frostwalk"
+description = "CVE-2026-64469 binder transaction-stack UAF: reachability probe, 4/4 PASS on panther. Targets domainprobe (must be installed) through lib/trigger/amclient.h, no root or private device needed for the mechanism itself; root is only for this probe's own kprobe confirmation. Provides nothing and never roots."
+default     = false
+
+stages = []
+
+[entry]
+"android14-6.1" = "entry.frostwalk@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

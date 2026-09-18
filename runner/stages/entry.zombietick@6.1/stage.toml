@@ -1,0 +1,134 @@
+# entry.zombietick@6.1 — CVE-2026-64560 posix-cpu-timer entry.
+#
+# Driven by `./pixel-ksu-root --recipe zombietick` as a foreign chain: an opaque
+# process behind a declared {invoke, markers, exit-code map, provides} contract. It
+# carries its own main(), groom, bridge, RW and effect inline, so none of the
+# runner's stage kinds are separable from it; `composed = false` carries that claim.
+
+schema = 1
+kind   = "entry"
+id     = "entry.zombietick@6.1"
+cve    = "CVE-2026-64560"
+kmi    = ["android14-6.1"]
+
+# Only one target header exists; the recipe restricts to it.
+targets = ["panther-CP2A.260705.006"]
+
+composed = false
+status   = "declared; builds standalone; runner-drivable as a foreign chain; STAGE0 lands, bridge fd never validated, never rooted; parks by design"
+
+[build]
+form    = "static-exe"          # vs GhostLock's preload-so
+entry   = "main"
+sources = ["cves/cve-2026-64560-zombietick/exploit-panther.c",
+           "cves/cve-2026-64560-zombietick/zt_procutil.c",
+           "cves/cve-2026-64560-zombietick/zt_race.c",
+           "cves/cve-2026-64560-zombietick/zt_spray.c",
+           "cves/cve-2026-64560-zombietick/zt_bridge.c",
+           "cves/lib/rw/nameblob.c",
+           "cves/lib/rw/slabpage.c",
+           "cves/lib/spray/sockpool.c",
+           "cves/lib/addr/physlayout.c",
+           "cves/lib/leak/futex_scan.c",
+           "cves/lib/spray/crosscache/crosscache.c",
+           "cves/lib/root/cred_image.c",
+           "cves/cve-2026-64560-zombietick/zt_stage0.c",
+           "cves/cve-2026-64560-zombietick/zt_crosscache.c",
+           "cves/cve-2026-64560-zombietick/zt_piperw.c",
+           "cves/cve-2026-64560-zombietick/zt_physrw.c",
+           "cves/cve-2026-64560-zombietick/zt_probe.c",
+           "cves/cve-2026-64560-zombietick/zt_ident.c",
+           "cves/cve-2026-64560-zombietick/zt_taskscan.c",
+           "cves/cve-2026-64560-zombietick/zt_credverify.c",
+           "cves/cve-2026-64560-zombietick/zt_root.c",
+           "cves/cve-2026-64560-zombietick/zt_config.c",
+           "cves/cve-2026-64560-zombietick/zt_main.c"]
+includes = ["cves"]             # resolves TARGET_HEADER / TARGET_FACTS_HEADER
+depends  = []
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-64560-zombietick"
+uses_target_header = true    # the sources take every device fact from the target description
+
+[facts]
+header    = "cves/targets/{target}/cve64560.h"
+generator = "runner/scripts/gen-cve64560-offsets.py"
+# Generated (62 defines), verified against the .c by harvest-live.sh: 23 also
+# appear inline in the .c and agree byte-for-byte; 39 are header-only.
+requires = [
+  "LINK_INIT_TASK", "LINK_INIT_CRED", "LINK_SELINUX_STATE",
+  "LINK_KMALLOC_CACHES", "LINK_ANON_PIPE_BUF_OPS",
+  "LINK_ASHMEM_IOCTL", "LINK_ASHMEM_OPEN", "LINK_ASHMEM_RELEASE",
+  "LINK_MEMSTART_ADDR", "LINK_KIMAGE_VOFFSET", "LINK_MODULE_DIRECT_BASE",
+  "LINK_MISC_LIST", "LINK_UHID_MISC", "LINK_UHID_FOPS",
+  "LINK_SYSCTL_BOOTID", "LINK_CYCLE_C", "LINK_CYCLE_D",
+  "LINK_SDATA", "LINK_END", "LINK_IMAGE_BASE",
+]
+forbids  = []
+
+[properties]
+retry_safe  = true
+panic_risk  = { pre_slide = "med", post_slide = "none" }
+destructive = ["sysctl boot_id .data", "init_task.thread_node (collateral)"]
+restores    = ["restore_misc_list", "confirm_stage0_cycle", "restore_stage0_state"]
+provides      = ["CAP_SLIDE", "CAP_KRW_C"]   # once composed
+requires_caps = ["groom.crosscache_timer"]
+retains       = ["CAP_KRW_C"]
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"   # cves/build/<target>/<output>: the binary built for this target
+dest = "/data/local/tmp/cve64560-entry"
+mode = "755"
+# Unbuffered stdout is the whole marker stream; exec children re-enter through
+# /proc/self/exe, not argv[0].
+command = "cd @DEV_TMP@; @DEV_ENTRY@ > @DEV_LOG@ 2>&1"
+accepts_base = false   # derives its own slide in-process
+
+[markers]
+# The win, and the thing this stage provides.
+pass = 'STAGE0_GATE_PASS slide=0x[0-9a-f]+ kernel_base=0x[0-9a-f]+'
+# Names exactly one marker because PRECONDITION_FAIL aborts the run:
+# TARGET_PROFILE_GATE_FAIL is permanent (fingerprint not recognised). Per-attempt
+# and transient preflight gates are caught by the generic default and routed
+# through the exit map to REFUSED instead.
+gate_fail = 'TARGET_PROFILE_GATE_FAIL'
+# The restore ledger; a *_RESTORE_FAIL/NOT_PROVEN leaves the boot DIRTY.
+restore_pass = '[A-Z][A-Z0-9_]*_RESTORE_PASS'
+restore_bad  = '[A-Z][A-Z0-9_]*_(RESTORE_NOT_PROVEN|RESTORE_UNREACHABLE|RESTORE_FAIL)'
+# This stage parks by design (hold_cred_unknown() yields after hooking /dev/ashmem
+# system-wide) and emits no heartbeat, so the runner parks and reboots rather than
+# SIGKILLing a process whose death would free the forged fops page.
+heartbeat = '[A-Z][A-Z0-9_]*_HEARTBEAT[[:space:]]+seq=[0-9]+'
+# What to print on a MISS instead of the last log line.
+diag = '(BOOTID_WRITE_MISS|STAGE0_MISS_CLEAN|STAGE0_MISS_NOT_PROVEN|MISC_BRIDGE_MISS_CLEAN|MISC_BRIDGE_MISS_NOT_PROVEN|MISC_BRIDGE_LATE_HIT|MISC_BRIDGE_MISS_PRESERVE).*'
+diag_count = ''   # no per-page counter
+
+# Exit status -> outcome (single-writer map off main()); consulted only where the
+# shot would otherwise score a bare MISS, and adb forwards a status only under the
+# v2 shell protocol. 2/3/4 are preflight bails (no attempt charged) -> REFUSED.
+[exit_map]
+"0"   = "PASS"
+"1"   = "MISS"
+"2"   = "REFUSED"
+"3"   = "REFUSED"
+"4"   = "REFUSED"
+"6"   = "MISS"
+"9"   = "MISS"
+"10"  = "MISS"
+"11"  = "MISS"
+"102" = "REFUSED"
+
+# The value extracted from the pass marker; only CAP_SLIDE has been observed.
+[provides]
+caps  = ["CAP_SLIDE"]
+field = 'kernel_base=0x[0-9a-f]+'
+label = "kernel_base"
+
+# Reboot before each shot: pre-slide panic risk, parks holding a system-wide
+# /dev/ashmem hook, and can leave a restore ledger DIRTY — so each attempt wants
+# a clean boot (the same default obtain_root synthesizes, made explicit here).
+[[setup]]
+reboot = true

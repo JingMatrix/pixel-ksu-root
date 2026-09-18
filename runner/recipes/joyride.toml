@@ -1,0 +1,37 @@
+# runner/recipes/joyride.toml — CVE-2026-93189 Joyride (see
+# entry.joyride@6.1/stage.toml).
+#
+# A failed hid-nintendo probe frees the report's field objects without
+# quiescing input, and hid_close_report() leaves report_id_hash[] pointing at
+# them until its loop over all 256 report ids finishes. A report delivered
+# through /dev/uhid in that tail reads its destination, length and extraction
+# parameters out of a freed hid_field -- a content-controlled write needing no
+# address disclosure, because the address is in report->field[].
+#
+# needs_root = true: root is supplied externally (e.g. by --recipe ffwheel),
+# not obtained here. Root buys the self-check -- field addresses resolved
+# while the device still holds them, read back afterwards -- and the kprobe
+# gate on hid_close_report() that the spray and pump key off. Real panic risk
+# on every shot: a report that lands on a field the spray did not win reads
+# its destination out of free-list bookkeeping.
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=joyride   # build it
+#     ./pixel-ksu-root --recipe joyride                    # drive it
+#
+# Reaches a measurement, not a capability: with no CAP_SU-providing stage this
+# is a hunt, and its product is the classified evidence under
+# logs/shots/<run>/.
+
+schema      = 1
+name        = "joyride"
+description = "CVE-2026-93189 Joyride: occupies the report fields a failed hid-nintendo probe frees and pumps reports at hid_close_report()'s free-then-memset window (needs_root, no reboot, real panic risk per shot)."
+default     = false
+
+stages = []
+
+[entry]
+"android14-6.1" = "entry.joyride@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

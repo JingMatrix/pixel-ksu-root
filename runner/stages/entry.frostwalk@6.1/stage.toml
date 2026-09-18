@@ -1,0 +1,85 @@
+# entry.frostwalk@6.1 — CVE-2026-64469 binder transaction-stack UAF, foreign chain.
+# A reachability probe: confirms the free (domainprobe force-stopped through
+# lib/trigger/amclient.h, no root) and the release-path walk (self-triggered
+# BINDER_THREAD_EXIT) are reachable in the order the bug needs, via a
+# confirmed kprobe handoff rather than a timed guess. No reclaim attempted;
+# provides nothing. Needs domainprobe (dev.pixelksu.domainprobe) installed —
+# see cves/cve-2026-64469-frostwalk/README.md. Needs root only for its own
+# kprobe confirmation instrument, not for the exploit mechanism itself; see
+# probe64469.c's "What still needs root".
+
+schema = 1
+kind   = "entry"
+id     = "entry.frostwalk@6.1"
+cve    = "CVE-2026-64469"
+kmi    = ["android14-6.1"]
+targets = ["panther-CP2A.260705.006"]
+composed = false
+status   = "runner-drivable; 4/4 PASS on panther against domainprobe (free confirmed via kprobe, sender survives); the write's actual target (freed memory vs. nothing linked) is not yet distinguished"
+
+[build]
+form    = "static-exe"
+entry   = "main"
+sources = ["cves/cve-2026-64469-frostwalk/probe64469.c",
+           "cves/lib/trigger/binder.c",
+           "cves/lib/trigger/amclient.c",
+           "cves/lib/trigger/app_saturator.c",
+           "cves/lib/trace/fnprobe.c"]
+includes = []
+depends  = ["cves/lib/trigger/binder.h", "cves/lib/trigger/amclient.h",
+            "cves/lib/trigger/app_saturator.h", "cves/lib/trace/fnprobe.h",
+            "cves/lib/base/handoff.h"]
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-64469-frostwalk"
+uses_target_header = false
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/cve64469-probe"
+mode = "755"
+# One attempt per shot; the danger note in probe64469.c says why this is not
+# looped tighter by default. The runner's own loop supplies shot-to-shot
+# retries. No device-path argument -- the target is domainprobe, resolved by
+# package/authority name through amclient, not a pushed device.
+command = "cd @DEV_TMP@; @DEV_ENTRY@ --attempts 1 > @DEV_LOG@ 2>&1"
+accepts_base = false
+needs_root = true
+
+[markers]
+# The milestone this probe establishes: the free really happened where the
+# topology hypothesis says it should, confirmed off the kernel, not assumed.
+pass = 'binder_free_transaction observed = yes'
+gate_fail    = 'CVE64469_NO_SUCH_GATE'
+restore_pass = 'CVE64469_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'CVE64469_NO_SUCH_RESTORE_BAD'
+heartbeat    = 'CVE64469_NO_SUCH_HEARTBEAT seq=[0-9]+'
+diag       = '(controller: binder_free_transaction observed = .*|controller: sender (was KILLED|exited normally).*)'
+diag_count = 'attempt [0-9]+/[0-9]+'
+
+# Exit status -> outcome; markers win over it.
+#   1 amclient call / probe arm / stream unavailable -> REFUSED
+[exit_map]
+"1" = "REFUSED"
+
+# Reaches a research milestone, not a capability: provides nothing.
+[provides]
+caps  = []
+field = ''
+label = ""
+
+# A stage that declares no [[setup]] at all inherits the runner's built-in
+# default, a reboot before every shot -- wasted wall time here, since nothing
+# this stage does needs a fresh boot. This step opts out of that by declaring
+# a real one instead: domainprobe force-stopped clean before each attempt, so
+# a stale process from a prior shot can't skew the next one's saturation
+# timing. am force-stop needs no root, same as everything else amclient
+# reaches.
+[[setup]]
+command = "am force-stop dev.pixelksu.domainprobe"
+needs_root = false
+once_per_boot = false
+description = "reset domainprobe to a clean stopped state before each shot"

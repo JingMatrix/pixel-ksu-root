@@ -1,0 +1,29 @@
+# runner/recipes/frostwalk-reclaim.toml — CVE-2026-64469, reclaim attempt.
+#
+# Builds on entry.frostwalk@6.1's confirmed-free handoff (4/4 PASS, see
+# cves/cve-2026-64469-frostwalk/README.md) by adding the step that probe64469.c
+# deliberately stopped short of: flooding kmalloc-192 with filler transactions,
+# sent by a thread other than the race sender, in the confirmed-free window,
+# before signalling BINDER_THREAD_EXIT. See reclaim64469.c's own header for why
+# this harness has exactly two informative outcomes and one of them is a kernel
+# panic — that is the harness working as designed, not a bug in it.
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=frostwalk-reclaim
+#     ./pixel-ksu-root --recipe frostwalk-reclaim
+#
+# Not the default recipe, and not looped unattended: a PANIC here reboots the
+# device and needs a re-root (./pixel-ksu-root --manager org.matrix.su).
+
+schema      = 1
+name        = "frostwalk-reclaim"
+description = "CVE-2026-64469 binder transaction-stack UAF: reclaim hunt. Floods kmalloc-192 in the confirmed-free window and signals BINDER_THREAD_EXIT; a PANIC is the confirmatory result. Provides nothing and never roots."
+default     = false
+
+stages = []
+
+[entry]
+"android14-6.1" = "entry.frostwalk-reclaim@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

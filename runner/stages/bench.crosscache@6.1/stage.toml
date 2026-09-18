@@ -172,8 +172,8 @@ label = ""
 # for a fresh boot of its own, so this runs on a boot that is both freshly
 # started and freshly rooted.
 [[setup]]
-# The runner prints a step's description when it has one and the raw shell
-# otherwise, so every setup step states what it is for rather than how.
+# A step with a description gets that line, stating what it is for rather than
+# how; a step with no description is left to its own output. This step has one.
 description = "confirm the su this borrows is present, and say which boot it belongs to"
 command = "echo root uid=$(id -u) up=$(cut -d. -f1 /proc/uptime)s"
 needs_root = true
