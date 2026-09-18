@@ -1,0 +1,44 @@
+# runner/recipes/ffwheel.toml — CVE-2026-43049 FFWheel, read-derived ROOT.
+#
+# The full root chain, with both addresses ffroot.c used to take from a root
+# kprobe (pipe_inode_info* and cred*) now supplied by the mm->mm_mt.ma_root
+# arbitrary read instead. Proven end to end on panther: uid 2000 -> 0, device
+# survives (ps shows root ffroot_w). See cves/cve-2026-43049-ffwheel/README.md
+# ("Read-derived root").
+#
+# Two cooperating processes, one stage:
+#   READER  ffread_mm (FFREAD_RESOLVE_W): corrupts its OWN mm->mm_mt.ma_root to
+#     turn /proc/self/maps into an arbitrary read, walks the WRITER's mm ->
+#     cred and -> files -> pipe_inode_info, self-verifies (CRED-MATCH/PIPE-MATCH),
+#     writes cred.txt + pi.txt, then parks (a corrupt maple root cannot survive
+#     exit_mmap, so it must never exit).
+#   WRITER  ffroot_w (= ffroot.c + the _text/_stext leak fix + a DET page mode +
+#     pid/pipefd publish): keeps a CLEAN mm, reads cred.txt + pi.txt, redirects
+#     its pipe->bufs and merge-writes 32 zeros into cred+4 -> uid 0.
+# Why two processes: two UAF-driven writes are needed (ma_root for the read,
+# pipe->bufs for the write; each trigger writes one pointer), and after the
+# read corrupts mm any page fault -> SIGSEGV -> exit_mmap panic, so the writer
+# cannot share the reader's mm.
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=ffwheel   # build it
+#     ./pixel-ksu-root --recipe ffwheel                     # drive it
+#
+# needs_root: the DET orchestration uses a root sidecar (comm-routed kprobe on
+# __task_pid_nr_ns for each process's mm, /proc/<pid>/pagemap for each DET
+# page). The root-free build (KernelSnitch for mm, physmap guess for the page)
+# is follow-on; the read mechanism and the cred-zero write are both already
+# root-free, only the two DET inputs stand in for it.
+
+schema      = 1
+name        = "ffwheel"
+description = "CVE-2026-43049 FFWheel read-derived ROOT: two-process compose zeroes cred -> uid 0. The WRITER places its forge deterministically via the cross-cache (lib/spray/crosscache, KNOWN order-3 base, no physmap guess); the reader's repeated read still uses the guess. Probabilistic (a miss panics), reboot-per-shot. Compare vs ffwheel-guess."
+default     = false
+
+stages = []
+
+[entry]
+"android14-6.1" = "entry.ffwheel@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

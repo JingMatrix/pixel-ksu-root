@@ -1,0 +1,39 @@
+# runner/recipes/ffwheel-guess.toml — CVE-2026-43049 FFWheel, physmap-guess hunt.
+#
+# Names the entry.ffwheel-guess@6.1 stage as a foreign chain: one self-contained
+# static binary, no handoff, no root. With no stage providing CAP_SU the
+# runner drives a `--recipe ffwheel-guess` run as a HUNT (runner/README.md §2.3) —
+# no manager detection, no ksud, nothing late-loaded.
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=ffwheel-guess   # build it
+#     ./pixel-ksu-root --recipe ffwheel-guess                    # hunt with it
+#
+# What this buys over the ad-hoc adb-shell driving used to develop it: the
+# same shot loop every other candidate gets — per-shot archives, the outcome
+# vocabulary, REFUSED/PANIC budgets, and (via [[setup]] reboot = true in the
+# stage manifest) a clean, freshly-booted device before every single attempt.
+# That last part is not just panic recovery: it is the actual experiment,
+# since a quiet system right after boot is the condition this specific
+# physmap-guess step needs and the ad-hoc driving could not reliably give it.
+#
+# This is the physmap-guess step in isolation, not the full root chain —
+# pipe_inode_info*/cred* still need an external, root-held kprobe handshake
+# (cves/cve-2026-43049-ffwheel/README.md). Composing the rest in is future
+# work; see that README's "Toward pipe_inode_info* and cred* without root".
+
+schema      = 1
+name        = "ffwheel-guess"
+description = "CVE-2026-43049 FFWheel read-derived ROOT (all-guess baseline): two-process compose zeroes cred -> uid 0, both halves placing their forge via the physmap guess. Probabilistic (a miss panics), reboot-per-shot. A/B against ffwheel (writer cross-cache)."
+default     = false
+
+# No non-entry stages: the entry is a self-contained standalone binary with
+# its own main(), and there is no handoff because there is no capability to
+# hand on yet.
+stages = []
+
+[entry]
+"android14-6.1" = "entry.ffwheel-guess@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

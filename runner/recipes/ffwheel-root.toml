@@ -1,0 +1,31 @@
+# runner/recipes/ffwheel-root.toml — CVE-2026-43049 FFWheel, root-required
+# design-verification hunt (see entry.ffwheel-root@6.1/stage.toml).
+#
+# needs_root=true, so the runner drives it through `su -c` on a boot that
+# already has root (e.g. from ./pixel-ksu-root --recipe ghostlock in the same
+# boot) -- same precondition as --recipe frostbind. It reaches a research
+# milestone (the forge/trigger/write primitive, confirmed via a scratch-page
+# arbitrary write), not a capability, so with no CAP_SU-providing stage this
+# is a hunt, not a compose.
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=ffwheel-root   # build it
+#     ./pixel-ksu-root --recipe ffwheel-root                     # drive it
+#
+# Compare vs --recipe ffwheel / --recipe ffwheel-guess, which resolve the same
+# runtime-dependent addresses root-free (crosscache / physmap guess) instead
+# of from root: a PASS here with those still failing isolates the failure to
+# address RESOLUTION, not the forge/offsets/trigger design.
+
+schema      = 1
+name        = "ffwheel-root"
+description = "CVE-2026-43049 FFWheel design check: pipe_inode_info*/cred*/entry-page VA from root kprobe+pagemap (needs_root), kernel text still root-free. Confirms the write primitive via a scratch-page readback, not uid (already 0)."
+default     = false
+
+stages = []
+
+[entry]
+"android14-6.1" = "entry.ffwheel-root@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

