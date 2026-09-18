@@ -1,0 +1,153 @@
+# cves/ — the exploit research
+
+One kernel CVE per subdirectory — sources plus a README on the vulnerability it
+exploits — over shared infrastructure.
+
+```
+cves/
+  cve-2026-43499-ghostlock/   CVE-2026-43499 — GhostLock futex-PI stack-slot UAF (roots panther; the default recipe)
+  cve-2026-43049-ffwheel/     CVE-2026-43049 — FFWheel uhid/hidpp failed-probe UAF (roots panther via a read-derived own-cred overwrite; --recipe ffwheel)
+  cve-2026-46242-badepoll/    CVE-2026-46242 — BadEpoll close-vs-close UAF (hunt + info-leak PoC + partial LPE chain)
+  cve-2026-56945-roguewave/   CVE-2026-56945 — RogueWave BigOcean IOMMU fault-handler unlocked list walk (confirmed by binary diff; reachable from plain shell via the public MediaCodec API, no root; active direction)
+  cve-2026-56914-dirtydock/   CVE-2026-56914 — DirtyDock GXP set_page_dirty() unlocked-unmap UAF (confirmed + self-triggerable via direct ioctl; two race strategies disproven via kprobe, timing not yet won)
+  cve-2026-64468-frostbind/   CVE-2026-64468 — Frostbind binder process-lifetime UAF (hunt; the read runs, the race is lost on bare metal)
+  cve-2026-64560-zombietick/  CVE-2026-64560 — Zombietick posix-cpu-timer UAF (hunt; only CAP_SLIDE reached)
+  cve-2026-49881-telecom/     CVE-2026-49881 — Telecom serviceClassExists (userspace domain pivot into system_server; research + domainprobe)
+  p0-465827985-stackjump/     P0 465827985 — StackJump system_server clipboard info leak (PoC builds and runs; leak not reproduced)
+  cve-2026-28594-sealslip/    CVE-2026-28594 — SealSlip ashmem memfd size-seal TOCTOU (present on panther; DoS-only for unprivileged, SELinux-bounded; kept for the instrument)
+  cve-2026-28662-cookiejar/   CVE-2026-28662 — CookieJar wpa_supplicant P2P2 PBMA cookie heap overflow (present on panther; documented, not yet chased — candidate first stage into CVE-2026-43501)
+  cve-2026-43284-dirtyfrag/   CVE-2026-43284 — DirtyFrag xfrm-ESP page-cache write (closed: unexploitable at any privilege)
+  lib/                        the shared exploitation library — lib/README.md
+  targets/                    per-device offset headers, 19 device-builds
+  Makefile                    compiles one payload from a resolved recipe
+```
+
+Which CVE the repo currently roots with, and what each bug is in one line, is the
+status table in the [root README](../README.md).
+
+Two entries are not kernel bugs and root nothing on their own.
+`cve-2026-49881-telecom/` is a userspace privilege-domain pivot — a Telecom logic
+flaw that runs an app's code in `system_server` — and it earns a place here
+because it enlarges the userspace context kernel attack surface is reached from,
+which is what every kernel-CVE hunt in this tree depends on. Its live probe is the
+third domain of [`../domainprobe`](../domainprobe); the directory itself holds the
+writeup, the policy tool and the measured reachability.
+
+`cve-2026-28594-sealslip/` is different again: not a logic pivot but a userspace
+size-mutation TOCTOU in `libcutils` — a forged, unsealed memfd is accepted as a
+size-sealed ashmem region and stays resizable under a consumer. It is present on
+panther, but the investigation closed it as DoS-only for an unprivileged
+attacker: SELinux lets only `system_server`, `mediaserver` and `media.extractor`
+map an app memfd, and none of the reachable consumers has an out-of-bounds shape.
+It is kept for the instrument (presence probe, an authoritative SELinux
+reachability matrix, a live consumer driver) and the measured boundary any future
+shared-memory bug reuses; the directory holds the writeup, `consumers.md`, and the
+harness.
+
+`cve-2026-28662-cookiejar/` is a third: a userspace heap overflow in
+`wpa_supplicant`, not the kernel. It earns a place here for the same reason
+`telecom` does — it's a candidate way to enlarge the userspace context a kernel
+bug is reached from, specifically `CVE-2026-43501` (not yet a directory of its
+own; its trigger needs `CAP_NET_ADMIN`, unreachable from shell on this kernel,
+but reachable from the `hal_wifi_supplicant_default` SELinux domain wpa_supplicant
+runs in — see cookiejar's README). Presence confirmed on panther; reachability
+and exploitability not yet attempted.
+
+## Baseline vs. candidate: the promotion gate
+
+One CVE at a time is the baseline — the chain the repo ships and is tested
+against. Every other CVE in this tree is a candidate: a real exploit ported into
+the same build-and-drive framework and held to the same description, driven by
+the runner as a [hunt](../runner/README.md#23-recipes).
+
+The distinction is a property the framework records and can check, not a claim a
+README makes. Promotion asks whether a candidate's own chain produces the
+terminal capability
+[`CAP_SU`](../runner/stages/handoff.suhelper/stage.toml#L38), and it reads that
+off [`[provides].caps`](../runner/stages/entry.zombietick@6.1/stage.toml#L203) —
+what a shot has been *observed* to yield — never off the declared
+`[properties].provides`. The two fields and the
+[comment separating them](../runner/stages/entry.zombietick@6.1/stage.toml#L200)
+are in [`../runner/README.md` §5](../runner/README.md#5-foreign-chain-contract).
+
+Four things have to hold before a candidate becomes the baseline:
+
+1. It drives its own chain to root on real hardware, repeatedly.
+2. It delivers `CAP_SU` through the handoff contract — a capability the framework
+   watches a stage produce.
+3. It is composed, not opaque. A foreign chain is drivable — the runner will hunt
+   with it — but a stage the tree cannot decompose into groom/bridge/rw/effect
+   cannot be the thing everything else is built on. A candidate says which it is
+   with [`composed`](../runner/stages/entry.zombietick@6.1/stage.toml#L34).
+4. It resolves through the same target and addressing model: one target header,
+   one resolver, one set of gates, not a second runtime fingerprint mechanism
+   competing with the first.
+
+Promotion then flips `default` between two recipes that already share the
+resolver, the handoff, the target headers and the KASLR leak. There is no
+parallel machinery to migrate.
+
+## How a CVE plugs into this tree
+
+A CVE joins by being described in three declarative inputs, which
+[`../runner/scripts/resolve-recipe.py`](../runner/scripts/resolve-recipe.py)
+folds into the `ART_*` make variables and into the runner's contract:
+
+1. A recipe under [`../runner/recipes/`](../runner/recipes/) — one entry stage
+   per kernel flavour plus any non-entry stages.
+   [`ghostlock.toml`](../runner/recipes/ghostlock.toml#L21) pairs a 6.1 and a 6.6
+   entry with the shared
+   [`handoff.suhelper`](../runner/recipes/ghostlock.toml#L19);
+   [`zombietick.toml`](../runner/recipes/zombietick.toml#L33) declares `stages = []`,
+   its entry being a self-contained standalone binary with no handoff.
+2. A stage manifest under [`../runner/stages/`](../runner/stages/).
+3. A [target header](targets/README.md) for the per-build offsets. A stage that
+   needs offsets no other exploit carries may restrict itself to the targets that
+   have them —
+   [`targets = ["panther-CP2A.260705.006"]`](../runner/stages/entry.zombietick@6.1/stage.toml#L32)
+   on 64560's entry, the only build with a `cve64560.h`.
+
+The manifest fields, the invocation shapes and the named `ARCH-G*` gates that
+refuse an invalid composition are in
+[`../runner/README.md`](../runner/README.md) §2 and §5; adding a device is in
+[`targets/README.md`](targets/README.md).
+
+## Building a payload
+
+The [`Makefile`](Makefile) compiles one payload from a resolved recipe. The
+source list is not written into it; it is composed from the recipe,
+[`../data/targets.json`](../data/targets.json) and the stage manifests by the
+resolver at
+[`RESOLVER := ../runner/scripts/resolve-recipe.py`](Makefile#L63). Run from
+`cves/`:
+
+```sh
+export ANDROID_NDK_HOME=/path/to/android-ndk
+
+make TARGET=panther-CP2A.260705.006                 # default recipe: ghostlock
+make TARGET=panther-CP2A.260705.006 RECIPE=zombietick # name a recipe explicitly
+make TARGET=panther-CP2A.260705.006 recipes         # list selectable recipes/stages
+make TARGET=panther-CP2A.260705.006 check           # run the gates, build nothing
+make TARGET=panther-CP2A.260705.006 info            # show the resolved composition
+```
+
+Convenience targets map Pixel model names to codenames (`make pixel7`,
+`make pixel10pro`, …), and `RECIPE=` passes through to them since make forwards
+command-line variables to sub-makes.
+[`../runner/scripts/build-payloads.sh`](../runner/scripts/build-payloads.sh)
+builds the full shipped set. Output lands in `build/$(TARGET)/`.
+
+Two build knobs:
+
+- [`API`](Makefile#L23) (default 35) — the Android API level of the NDK
+  toolchain.
+- [`BUILD_TAG`](Makefile#L38) — pins the compile marker in place of
+  `__DATE__ " " __TIME__` (the `#ifndef BUILD_TAG` at
+  [`cve-2026-43499-ghostlock/common.h:47`](cve-2026-43499-ghostlock/common.h#L47))
+  so the 6.1 payloads are byte-reproducible. It affects the 6.1 sources only —
+  the 6.6 tree has no such marker — and is empty by default.
+
+## License
+
+[Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0), inherited from the upstream [NebuSec](https://github.com/NebuSec/CyberMeowfia) GhostLock exploit. See
+[`../NOTICE`](../NOTICE).

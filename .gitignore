@@ -1,0 +1,41 @@
+# Built exploit payloads and helper
+artifacts/exploits/*.so
+artifacts/cve-helper
+artifacts/*
+
+# Exploit build tree
+cves/build/
+
+# Run artifacts and logs
+logs/
+*.log
+
+# Keep the exploit source and target table tracked
+!cves/
+!data/targets.json
+
+# Harvested device blobs — regenerate with runner/scripts/harvest-live.sh
+data/live/*/Image
+data/live/*/btf-vmlinux
+data/live/*/kallsyms.txt
+data/live/*/dmesg.txt
+
+__pycache__/
+
+# CVE-2026-64560 compiled probes (sources tracked)
+cves/cve-2026-64560-zombietick/exploit-ashmem
+cves/cve-2026-64560-zombietick/trigger
+# CVE-2026-64468 compiled probes (sources tracked)
+cves/cve-2026-64468-frostbind/binderctl
+cves/cve-2026-64468-frostbind/nested64468
+cves/cve-2026-64468-frostbind/pump64468
+cves/cve-2026-64468-frostbind/race64468
+cves/cve-2026-64468-frostbind/racing64468
+# KASLR probe (source tracked)
+cves/lib/kaslr/kaslr_marker
+# shared research tools (compiled)
+tools/hwbp/hwbp
+scratch_verify/
+
+# Working notes and analysis; not part of the deliverable.
+docs/
