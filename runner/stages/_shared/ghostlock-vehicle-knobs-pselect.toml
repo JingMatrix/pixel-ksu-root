@@ -1,0 +1,18 @@
+# The pselect vehicle's own tuning knobs, for the interfaces whose pselect
+# route is fops_pselect.c's parameterised implementation (android14-6.1,
+# qgki-5.4). PSELECT_SHIFT's domain is derived from a stage's own
+# [pselect_map] declaration; android15-6.6's pselect route (fops.c) is a
+# single hardcoded placement with no such map and no equivalent knob, so
+# that interface does not pull this fragment in -- see
+# ghostlock-vehicle-knobs.toml for the vehicles it shares with every
+# interface.
+[tunables]
+PSELECT_SHIFT = { type = "int", domain = "pselect_shift_window", default_fact = "PSELECT_WAITER_WORD_SHIFT", applies_when = "RECLAIM_VEHICLE=pselect", help = "the stack_fds word the freed waiter is assumed to land on" }
+PSELECT_PAGE_ATTEMPTS = { type = "int", min = 1, max = 1000, applies_when = "RECLAIM_VEHICLE=pselect", help = "outer loop: how many times the kernel page is re-sprayed" }
+PSELECT_ROUTE_ATTEMPTS = { type = "int", min = 1, max = 1000000, applies_when = "RECLAIM_VEHICLE=pselect", help = "inner loop: pselect windows per sprayed page" }
+PSELECT_CFI_MISSES_PER_PAGE = { type = "int", min = 1, max = 100000, applies_when = "RECLAIM_VEHICLE=pselect", help = "failed cfi stages tolerated on one page before it is re-sprayed" }
+PSELECT_TIMEOUT_USEC = { type = "int", min = 1000, max = 5000000, applies_when = "RECLAIM_VEHICLE=pselect", help = "how long one window holds the overlay on the kernel stack" }
+PSELECT_ROUTE_DELAY_USEC = { type = "int", min = -1, max = 1000000, applies_when = "RECLAIM_VEHICLE=pselect", help = "how long the consumer waits before firing inside a window; negative uses the route's own per-attempt fraction of PSELECT_TIMEOUT_USEC" }
+# Despite the prefix, this one is read on every vehicle (main.c, LIB_KMI<66).
+PSELECT_CONSUMER_NICE_VALUE = { type = "int", min = -20, max = 19 }
+PSELECT_ACCEPT_NONREADY_CFI = { type = "bool", applies_when = "RECLAIM_VEHICLE=pselect", help = "stage the cfi step even when pselect returned something other than PSELECT_EXPECTED_READY" }

