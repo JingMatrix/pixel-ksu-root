@@ -6,6 +6,7 @@
     {"codename": "bluejay", "build": "CP1A.260405.005", "kernel": "6.1.145-android14-11-gfa1d6308d1fe-ab14691759", "kmi": "android14-6.1", "payload": "android14-6.1-cp1a"},
     {"codename": "bluejay", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
     {"codename": "caiman", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
+    {"codename": "caiman", "build": "CP2A.260805.005", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
     {"codename": "cheetah", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
     {"codename": "comet", "build": "CP2A.260705.006", "kernel": "6.1.157-android14-11-gbd23337e42e7-ab14791245", "kmi": "android14-6.1", "payload": "android14-6.1-a"},
     {"codename": "frankel", "build": "CP2A.260705.006", "kernel": "6.6.118-android15", "kmi": "android15-6.6", "payload": "android15-6.6"},

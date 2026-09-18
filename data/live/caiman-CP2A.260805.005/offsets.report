@@ -1,0 +1,169 @@
+_text  = 0xffffffe406600000   (98630 vmlinux symbols)
+Image  = 35633664 bytes      KIMAGE_TEXT_BASE = 0xffffffc008000000
+
+== symbols (kallsyms) ==
+macro                                   derived    committed  verdict
+----------------------------------------------------------------------------
+ASHMEM_IOCTL_OFF                       0xc38d28            -  NEW (absent from target.h)
+ASHMEM_MMAP_OFF                        0xc396b8            -  NEW (absent from target.h)
+ASHMEM_OPEN_OFF                        0xc398d8            -  NEW (absent from target.h)
+ASHMEM_RELEASE_OFF                     0xc39960            -  NEW (absent from target.h)
+ASHMEM_SHOW_FDINFO_OFF                 0xc39a80            -  NEW (absent from target.h)
+ASHMEM_FOPS_OFF                       0x1280b50            -  NEW (absent from target.h)
+CONFIGFS_READ_ITER_OFF                 0x464400            -  NEW (absent from target.h)
+CONFIGFS_BIN_WRITE_ITER_OFF            0x464930            -  NEW (absent from target.h)
+COPY_SPLICE_READ_OFF                   0x3e5fd4            -  NEW (absent from target.h)
+NOOP_LLSEEK_OFF                        0x3986dc            -  NEW (absent from target.h)
+INIT_TASK_OFF                         0x201f640            -  NEW (absent from target.h)
+ROOT_TASK_GROUP_OFF                   0x2208580            -  NEW (absent from target.h)
+SELINUX_ENFORCING_OFF                 0x225a420            -  NEW (absent from target.h)
+SELINUX_BLOB_SIZES_OFF                0x15ceb88            -  NEW (absent from target.h)
+SECURITY_HOOK_HEADS_OFF               0x15ce478            -  NEW (absent from target.h)
+KMALLOC_CACHES_OFF                    0x15cdfb8            -  NEW (absent from target.h)
+ANON_PIPE_BUF_OPS_OFF                 0x1109910            -  NEW (absent from target.h)
+CALL_USERMODEHELPER_EXEC_WORK_OFF       0xd36f4            -  NEW (absent from target.h)
+SYSTEM_UNBOUND_WQ_OFF                 0x200ae60            -  NEW (absent from target.h)
+SLIDE_NFULNL_LOGGER_OFF               0x20129d0            -  NEW (absent from target.h)
+SLIDE_SYSCTL_BOOTID_OFF               0x227b498            -  NEW (absent from target.h)
+SLIDE_LOGGERS_0_1_OFF                 0x2012920            -  NEW (absent from target.h)
+SLIDE_RANDOM_BOOT_ID_DATA_OFF         0x2137d08            -  NEW (absent from target.h)
+
+== struct fields (BTF) ==
+   KMI stability is an assumption; BTF is the measurement.
+macro                                   derived    committed  verdict
+----------------------------------------------------------------------------
+TASK_PID_OFF                              0x630            -  NEW (absent from target.h)
+TASK_TGID_OFF                             0x634            -  NEW (absent from target.h)
+TASK_REAL_PARENT_OFF                      0x640            -  NEW (absent from target.h)
+TASK_REAL_CRED_OFF                        0x830            -  NEW (absent from target.h)
+TASK_CRED_OFF                             0x838            -  NEW (absent from target.h)
+TASK_COMM_OFF                             0x848            -  NEW (absent from target.h)
+TASK_TASKS_OFF                            0x550            -  NEW (absent from target.h)
+TASK_SECCOMP_OFF                          0x900            -  NEW (absent from target.h)
+TASK_ATOMIC_FLAGS_OFF                     0x5f0            -  NEW (absent from target.h)
+FAKE_TASK_USAGE_OFF                        0x40            -  NEW (absent from target.h)
+FAKE_TASK_PRIO_OFF                         0x84            -  NEW (absent from target.h)
+FAKE_TASK_NORMAL_PRIO_OFF                  0x8c            -  NEW (absent from target.h)
+FAKE_TASK_TASK_GROUP_OFF                  0x348            -  NEW (absent from target.h)
+FAKE_TASK_PI_LOCK_OFF                     0x924            -  NEW (absent from target.h)
+FAKE_TASK_PI_WAITERS_OFF                  0x938            -  NEW (absent from target.h)
+FAKE_TASK_PI_TOP_TASK_OFF                 0x948            -  NEW (absent from target.h)
+FAKE_TASK_PI_BLOCKED_ON_OFF               0x950            -  NEW (absent from target.h)
+CRED_UID_OFF                                0x4            -  NEW (absent from target.h)
+CRED_SECUREBITS_OFF                        0x24            -  NEW (absent from target.h)
+CRED_CAPS_OFF                              0x28            -  NEW (absent from target.h)
+CRED_SECURITY_OFF                          0x78            -  NEW (absent from target.h)
+MM_OWNER_OFF                              0x338            -  NEW (absent from target.h)
+WAITER_TREE_ENTRY_OFF                       0x0            -  NEW (absent from target.h)
+WAITER_PI_TREE_ENTRY_OFF                   0x18            -  NEW (absent from target.h)
+WAITER_TASK_OFF                            0x30            -  NEW (absent from target.h)
+WAITER_LOCK_OFF                            0x38            -  NEW (absent from target.h)
+WAITER_WAKE_STATE_OFF                      0x40            -  NEW (absent from target.h)
+WAITER_WW_CTX_OFF                          0x50            -  NEW (absent from target.h)
+FOPS_OWNER_OFF                              0x0            -  NEW (absent from target.h)
+FOPS_LLSEEK_OFF                             0x8            -  NEW (absent from target.h)
+FOPS_READ_OFF                              0x10            -  NEW (absent from target.h)
+FOPS_WRITE_OFF                             0x18            -  NEW (absent from target.h)
+FOPS_READ_ITER_OFF                         0x20            -  NEW (absent from target.h)
+FOPS_WRITE_ITER_OFF                        0x28            -  NEW (absent from target.h)
+FOPS_IOCTL_OFF                             0x50            -  NEW (absent from target.h)
+FOPS_COMPAT_IOCTL_OFF                      0x58            -  NEW (absent from target.h)
+TASK_GROUP_LEADER_OFF                     0x670            -  NEW (absent from target.h)
+CRED_USAGE_OFF                              0x0            -  NEW (absent from target.h)
+CRED_USER_OFF                              0x80            -  NEW (absent from target.h)
+CRED_USER_NS_OFF                           0x88            -  NEW (absent from target.h)
+CRED_UCOUNTS_OFF                           0x90            -  NEW (absent from target.h)
+CRED_GROUP_INFO_OFF                        0x98            -  NEW (absent from target.h)
+MISCDEVICE_FOPS_OFF                        0x10            -  NEW (absent from target.h)
+STRUCT_SLAB_CACHE_OFF                      0x18            -  NEW (absent from target.h)
+STRUCT_PAGE_COMPOUND_HEAD_OFF               0x8            -  NEW (absent from target.h)
+EP_OFF_WQ                                  0x30            -  NEW (absent from target.h)
+EP_OFF_POLL_WAIT                           0x48            -  NEW (absent from target.h)
+EP_OFF_RDLLIST                             0x60            -  NEW (absent from target.h)
+EP_OFF_LOCK                                0x70            -  NEW (absent from target.h)
+EP_OFF_RBR                                 0x78            -  NEW (absent from target.h)
+EP_OFF_OVFLIST                             0x88            -  NEW (absent from target.h)
+EP_OFF_WS                                  0x90            -  NEW (absent from target.h)
+EP_OFF_REFS                                0xb0            -  NEW (absent from target.h)
+EPITEM_OFF_RDLLINK                         0x18            -  NEW (absent from target.h)
+EPITEM_OFF_FFD                             0x30            -  NEW (absent from target.h)
+EPITEM_OFF_PWQLIST                         0x40            -  NEW (absent from target.h)
+EPITEM_OFF_EP                              0x48            -  NEW (absent from target.h)
+EPITEM_OFF_FLLINK                          0x50            -  NEW (absent from target.h)
+EPITEM_OFF_WS                              0x60            -  NEW (absent from target.h)
+EPITEM_OFF_EVENT                           0x68            -  NEW (absent from target.h)
+EPPOLL_OFF_BASE                             0x8            -  NEW (absent from target.h)
+EPPOLL_OFF_WAIT                            0x10            -  NEW (absent from target.h)
+FILE_OFF_F_INODE                           0x20            -  NEW (absent from target.h)
+FILE_OFF_F_OP                              0x28            -  NEW (absent from target.h)
+FILE_OFF_F_LOCK                            0x30            -  NEW (absent from target.h)
+FILE_OFF_F_COUNT                           0x38            -  NEW (absent from target.h)
+FILE_OFF_F_POS                             0x78            -  NEW (absent from target.h)
+FILE_OFF_PRIVATE_DATA                      0xd8            -  NEW (absent from target.h)
+FILE_OFF_F_EP                              0xe0            -  NEW (absent from target.h)
+INODE_OFF_I_SB                             0x28            -  NEW (absent from target.h)
+INODE_OFF_I_INO                            0x40            -  NEW (absent from target.h)
+SUPER_BLOCK_OFF_S_DEV                      0x10            -  NEW (absent from target.h)
+PIPE_INODE_OFF_HEAD                        0x60            -  NEW (absent from target.h)
+PIPE_INODE_OFF_TAIL                        0x64            -  NEW (absent from target.h)
+PIPE_INODE_OFF_BUFS                        0xa8            -  NEW (absent from target.h)
+PIPE_BUFFER_OFF_PAGE                        0x0            -  NEW (absent from target.h)
+PIPE_BUFFER_OFF_OFFSET                      0x8            -  NEW (absent from target.h)
+PIPE_BUFFER_OFF_LEN                         0xc            -  NEW (absent from target.h)
+PIPE_BUFFER_OFF_OPS                        0x10            -  NEW (absent from target.h)
+PIPE_BUFFER_OFF_FLAGS                      0x18            -  NEW (absent from target.h)
+PIPE_BUFFER_OFF_PRIVATE                    0x20            -  NEW (absent from target.h)
+CFG_PAGE_OFF                               0x10            -  NEW (absent from target.h)
+CFG_NEEDS_READ_FILL_OFF                    0x50            -  NEW (absent from target.h)
+CFG_BIN_BUFFER_OFF                         0x58            -  NEW (absent from target.h)
+CFG_BIN_BUFFER_SIZE_OFF                    0x60            -  NEW (absent from target.h)
+CFG_CB_MAX_SIZE_OFF                        0x64            -  NEW (absent from target.h)
+FOPS_MMAP_OFF                              0x60            -  NEW (absent from target.h)
+FOPS_OPEN_OFF                              0x70            -  NEW (absent from target.h)
+FOPS_RELEASE_OFF                           0x80            -  NEW (absent from target.h)
+FOPS_SPLICE_READ_OFF                       0xc8            -  NEW (absent from target.h)
+FOPS_SHOW_FDINFO_OFF                       0xe0            -  NEW (absent from target.h)
+STRUCT_PAGE_SIZE                           0x40            -  NEW (absent from target.h)
+WQ_DFL_PWQ_OFF                             0xb0            -  NEW (absent from target.h)
+PWQ_WQ_OFF                                  0x8            -  NEW (absent from target.h)
+PWQ_WORK_COLOR_OFF                         0x10            -  NEW (absent from target.h)
+PWQ_REFCNT_OFF                             0x18            -  NEW (absent from target.h)
+PWQ_NR_IN_FLIGHT_OFF                       0x1c            -  NEW (absent from target.h)
+PWQ_NR_ACTIVE_OFF                          0x5c            -  NEW (absent from target.h)
+PWQ_MAX_ACTIVE_OFF                         0x60            -  NEW (absent from target.h)
+POOL_WORKLIST_OFF                          0x28            -  NEW (absent from target.h)
+POOL_NR_IDLE_OFF                           0x3c            -  NEW (absent from target.h)
+WORK_DATA_OFF                               0x0            -  NEW (absent from target.h)
+WORK_ENTRY_OFF                              0x8            -  NEW (absent from target.h)
+WORK_FUNC_OFF                              0x18            -  NEW (absent from target.h)
+SECCOMP_MODE_OFF                            0x0            -  NEW (absent from target.h)
+SECCOMP_FILTER_OFF                          0x8            -  NEW (absent from target.h)
+
+== slab strides (/proc/slabinfo) ==
+   a struct's size is not its slab stride.
+macro                                   derived    committed  verdict
+----------------------------------------------------------------------------
+(no slabinfo captured — skipped)
+
+== pointer-derived (Image) ==
+   static/inlined symbols; kallsyms and BTF cannot see these.
+macro                                   derived    committed  verdict
+----------------------------------------------------------------------------
+ASHMEM_COMPAT_IOCTL_OFF                0xc39660            -  NEW (absent from target.h)
+ASHMEM_MISC_FOPS_OFF                  0x217cb80            -  NEW (absent from target.h)
+
+== code offsets (Image) ==
+   kprobe oracles and _THIS_IP_; hand-derived offsets rot silently.
+macro                                   derived    committed  verdict
+----------------------------------------------------------------------------
+POSIX_CPU_TIMER_DEL_RACE_OFF              0x128            -  NEW (absent from target.h)
+SLIDE_TRACE_MARK_IP_OFF                0x1f0ac8            -  NEW (absent from target.h)
+
+== stack overlay (Image) ==
+   where the freed rt_mutex_waiter lands in stack_fds; per build, not per kernel version.
+macro                                   derived    committed  verdict
+----------------------------------------------------------------------------
+PSELECT_WAITER_WORD_SHIFT                   0x1            -  NEW (absent from target.h)
+
+----------------------------------------------------------------------------
+0 mismatch, 0 unresolved
