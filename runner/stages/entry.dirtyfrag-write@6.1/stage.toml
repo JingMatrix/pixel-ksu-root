@@ -1,0 +1,103 @@
+# entry.dirtyfrag-write@6.1 — CVE-2026-43284 "DirtyFrag", the write-primitive proof.
+#
+# Same source and build output as entry.dirtyfrag@6.1, two flags apart. Assumes
+# CAP_NET_ADMIN (from a prior baseline root on this boot, since the shell domain
+# cannot open a NETLINK_XFRM socket) and asks the other half's question: does the
+# 4-byte store land in the page cache of a read-only file? A de-risking
+# measurement, not a root step — nothing here roots anything.
+
+schema = 1
+kind   = "entry"
+id     = "entry.dirtyfrag-write@6.1"
+cve    = "CVE-2026-43284"
+kmi    = ["android14-6.1"]
+composed = false
+status   = "declared; builds standalone; runner-drivable; needs a prior baseline root on the same boot. Under root the SA installs and esp_input() runs the AEAD on both pinning paths, but the store lands on a copy — not a privilege wall: skb_orphan_frags_rx() orphans MSG_ZEROCOPY frags before ip_rcv(); provides nothing on this tree"
+
+[build]
+# The SAME source and output as entry.dirtyfrag@6.1 (one file, two modes); the
+# primitive is data-only, so no target header and no offsets.
+form    = "static-exe"
+entry   = "main"
+sources = ["cves/cve-2026-43284-dirtyfrag/dirtyfrag.c", "cves/cve-2026-43284-dirtyfrag/xfrm_trigger.c"]
+includes = []                   # self-contained: libc + linux/xfrm.h, netlink, errqueue
+depends  = []
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-Werror"]   # no -pthread: single-threaded
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-43284-dirtyfrag-write"
+uses_target_header = false
+
+[properties]
+# Each shot rebuilds its scratch file (O_RDWR|O_CREAT|O_TRUNC) and re-baselines
+# per arm, so a shot that changes nothing leaves the device as it found it.
+retry_safe  = true
+# The malformed datagram is consumed by the kernel's own encap listener on
+# loopback and the SA is deleted on the way out; no panic on hardware, no slide.
+panic_risk  = { pre_slide = "none", post_slide = "none" }
+# The point of the stage: if the primitive works, 4 bytes of a file this process
+# only ever opened O_RDONLY change under it.
+destructive = ["4 bytes of /data/local/tmp/dirtyfrag.target (a scratch file the entry creates)"]
+restores    = []   # the scratch file is the entry's own, truncated by the next shot
+# CAP_FILE_W is the capability this WOULD supply once composed; caps below stays
+# empty because nothing has been OBSERVED. Only CAP_SU is load-bearing to the runner.
+provides      = ["CAP_FILE_W"]
+requires_caps = ["CAP_SU"]   # cannot install the SA itself; needs a root already on the boot
+retains       = []
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/dirtyfrag-entry"   # same dest as entry.dirtyfrag@6.1; recipes never resolve together
+mode = "755"
+# --write --method both: runs the splice path then the MSG_ZEROCOPY replacement
+# against the same offset, re-baselining between, so the log records the difference.
+command = "cd @DEV_TMP@; @DEV_ENTRY@ --write --method both > @DEV_LOG@ 2>&1"
+accepts_base = false   # data-only primitive, no base to replay
+# Root comes from a prior baseline root on this boot; the shell domain cannot open
+# a NETLINK_XFRM socket and CAP_NET_ADMIN is outside its bounding set.
+needs_root = true
+
+[markers]
+# The win: the store landed in the page cache, read back through a fresh O_RDONLY
+# descriptor. Never observed on hardware.
+pass = 'DF_WRITE_PASS method=(zc|splice) off=0x[0-9a-f]+ val=0x[0-9a-f]{8}'
+# Narrow and permanent: the only reachable gate is a 4-byte store straddling a
+# page boundary. Transient bails exit 3 -> REFUSED via the exit map instead.
+gate_fail = 'DF_WRITE_GATE_FAIL wall=offset_spans_page'
+# Sentinels: deletes its SA and closes its sockets, holds nothing open.
+restore_pass = 'DIRTYFRAG_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'DIRTYFRAG_NO_SUCH_RESTORE_BAD'
+heartbeat    = 'DIRTYFRAG_NO_SUCH_HEARTBEAT seq=[0-9]+'
+# On a MISS, which path was tried and what came back: the SA install and its rc,
+# whether the zerocopy send pinned or copied, each arm's readback, plus DF_FEATURES
+# and the in-band DF_PAGE_IDENTITY.
+diag       = '(DF_SA_ADD spi=.*|DF_ZC_SENT pinned=-?[0-9]+|DF_SPLICE_RESULT changed=.*|DF_ZC_RESULT changed=.*|DF_FEATURES .*|DF_PAGE_IDENTITY .*|DF_ESP_REACHED .*|DF_TRIGGER_MISS .*)'
+diag_count = ''   # one SA and one datagram per arm, no round counter
+
+# Exit status -> outcome (the EX_* block in dirtyfrag.c); markers win over it.
+#   1 both arms ran, no change -> MISS   2 offset straddles page -> PRECONDITION_FAIL (+gate_fail)
+#   3 scratch/baseline failed / 4 bad argv -> REFUSED
+[exit_map]
+"1" = "MISS"
+"2" = "PRECONDITION_FAIL"
+"3" = "REFUSED"
+"4" = "REFUSED"
+
+# Observed nothing, so caps is empty and the recipe stays on the hunt path even
+# though [properties].provides names CAP_FILE_W as the declared graph.
+[provides]
+caps  = []
+field = ''
+label = ""
+
+# NOT a reboot: the root this runs under is an su left by a baseline root earlier
+# on this boot, and a reboot would take it away and REFUSE every later shot. The
+# step instead records that a root shell answers (uid=0) and on which kernel;
+# needs_root so setup_precheck() fails the run up front with the command to run first.
+[[setup]]
+command = "echo dirtyfrag-write-setup uid=$(id -u) kernel=$(uname -r) uptime=$(cut -d. -f1 /proc/uptime)s"
+needs_root = true
+once_per_boot = true
+description = "record that a root shell answers on this boot (uid=0) and which kernel it answers on"

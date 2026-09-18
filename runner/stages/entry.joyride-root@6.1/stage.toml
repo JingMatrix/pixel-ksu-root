@@ -1,0 +1,103 @@
+# entry.joyride-root@6.1 — CVE-2026-93189, the experiment stage for the
+# unquiesced hid_hw_stop() free. Root, because the shot measures itself: probes
+# on the bind, on every report and on the free. No reboot — the whole sequence
+# lives in one process and leaves no per-boot state behind it.
+
+schema = 1
+kind   = "entry"
+id     = "entry.joyride-root@6.1"
+cve    = "CVE-2026-93189"
+kmi    = ["android14-6.1"]
+composed = false
+status   = "Experiment: drives a failed probe to the free and measures the gap a reclaim must fit inside; aims into the window only with --race, and provides nothing"
+
+[build]
+form    = "static-exe"
+entry   = "main"
+sources = ["cves/cve-2026-93189-joyride/joyride.c",
+           "cves/lib/trigger/uhid.c",
+           "cves/lib/trace/fnprobe.c",
+           "cves/lib/spray/keyspray.c",
+           "cves/lib/rw/kprobe_read.c"]
+includes = []
+depends  = ["cves/lib/trigger/uhid.h", "cves/lib/trace/fnprobe.h",
+            "cves/lib/spray/keyspray.h", "cves/lib/rw/kprobe_read.h",
+            "cves/lib/base/clock.h", "cves/lib/base/cpu.h",
+            "cves/lib/base/outcome.h"]
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-93189-joyride"
+uses_target_header = false
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/cve93189-joyride"
+mode = "755"
+# --observe is what root buys: the kprobes that turn the shot into a
+# measurement. It costs timing, so the window it reports is a window with
+# probes armed. --approach pumps reports up to the free and stops on
+# UHID_CLOSE, which is what makes gap_us the distance a reclaim has to fit
+# inside; drop it for a shot that sends nothing near the free. Three further
+# modes go past measuring: --race carries the pump through the free, --reclaim
+# occupies the object as it is freed and reads back whose bytes are in it, and
+# --forge writes a closed hidraw_list into it, aimed at a word of the object
+# itself. --forge needs --hidraw-off (offsetof(hid_device, hidraw), 7448 on
+# this build) and is the mode that can panic: a report that reads the object
+# before the spray has filled it walks a free list pointer.
+command = "cd @DEV_TMP@; @DEV_ENTRY@ --observe --race > @DEV_LOG@ 2>&1"
+accepts_base = false
+# Runs as root for tracefs: kprobe_events, the event enables and kptr_restrict.
+# The trigger itself needs only group 3011.
+needs_root = true
+
+[markers]
+# The unwind ran: the object was published, the probe failed on our clock, and
+# hid_hw_stop() freed it with no quiesce in between.
+pass = 'UNWIND_SEEN window_ms=-?[0-9]+'
+# Permanent on this build: hid-nintendo did not take the device.
+gate_fail = 'NO_BIND'
+restore_pass = 'JOYRIDE_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'JOYRIDE_NO_SUCH_RESTORE_BAD'
+heartbeat    = 'JOYRIDE_NO_SUCH_HEARTBEAT seq=[0-9]+'
+# The measurement, and how far a shot that missed got.
+diag       = '(WINDOW .*|timeline ms: .*|APPROACH .*|NO_TIMED_FAILURE|NO_UNWIND .*|RACE_FIRED .*|OBSERVE_[A-Z_]+)'
+diag_count = 'before=[0-9]+'
+
+# Exit status -> outcome; markers win over it.
+#   1 ran, the unwind was not observed   2 no uhid, no tracefs, or no bind
+#   3 setup failed before anything ran   4 bad command line
+[exit_map]
+"1" = "MISS"
+"2" = "PRECONDITION_FAIL"
+"3" = "REFUSED"
+"4" = "REFUSED"
+
+[properties]
+retry_safe  = true
+# For the command this stage declares. --approach leaves one write per shot
+# that can still be in flight when the free lands; the WINDOW line's `after`
+# reports whether one was. Without it the risk is none; --race raises it to
+# high, since that mode aims for the window rather than at its edge.
+panic_risk  = { pre_slide = "low", post_slide = "none" }
+# --observe writes tracing state and relaxes pointer masking; lib_fnprobe_clear
+# puts both back on every exit path.
+destructive = ["kprobe_events", "kptr_restrict"]
+restores    = ["lib_fnprobe_clear"]
+
+# Reaches a measurement, not a capability.
+[provides]
+caps  = []
+field = ''
+label = ""
+
+# No reboot: a stage that declares no setup inherits one, and this experiment
+# wants the opposite — the boot that already has root, held across every shot.
+[[setup]]
+reboot = false
+command = "echo joyride-setup uid=$(id -u) kernel=$(uname -r) uhid=$([ -c /dev/uhid ] && echo present || echo absent)"
+needs_root = true
+once_per_boot = true
+description = "record that a root shell answers on this boot, and that /dev/uhid exists"

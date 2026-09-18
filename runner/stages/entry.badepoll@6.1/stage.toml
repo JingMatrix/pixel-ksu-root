@@ -1,0 +1,95 @@
+# entry.badepoll@6.1 — CVE-2026-46242 "Bad Epoll" close-vs-close UAF.
+#
+# A DETECTION hunt, not a root path: the binary measures whether __ep_remove()'s
+# window can be won on this kernel and stops at the answer. `composed = false` and
+# an empty [provides] put it on the hunt path (runner/README.md §2.3). Needs no
+# root and no setup — epoll is ungated by SELinux and reachable from the app sandbox.
+
+schema = 1
+kind   = "entry"
+id     = "entry.badepoll@6.1"
+cve    = "CVE-2026-46242"
+kmi    = ["android14-6.1"]
+
+# No target restriction and no [facts]: the reclaim is same-cache (another
+# eventpoll), so nothing depends on struct layout; it builds for every android14-6.1.
+
+composed = false
+status   = "declared; builds standalone; runner-drivable; the fix is absent on panther and the close-vs-close window IS won there (12/12 hunt shots PASS, ~1 win/36s of racing); the UAF write lands but nothing is built on top of it"
+
+[build]
+form    = "static-exe"
+entry   = "main"
+sources = [
+  "cves/cve-2026-46242-badepoll/oracle46242.c",
+  "cves/cve-2026-46242-badepoll/bp_trigger.c",
+  "cves/cve-2026-46242-badepoll/bp_leak.c",
+  "cves/cve-2026-46242-badepoll/bp_spray.c",
+  "cves/cve-2026-46242-badepoll/bp_forge.c",
+]
+includes = ["cves"]             # resolves TARGET_HEADER
+depends  = ["cves/lib/base/*.h"]   # header-only clock, affinity, byte and process helpers
+defines  = []
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-pthread", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = []
+output   = "cve-2026-46242-badepoll"
+uses_target_header = true    # structure layouts and symbol offsets
+
+[properties]
+# Every round is independent: fresh epoll objects, nothing held across the boundary.
+retry_safe  = true
+# No slide. The UAF write's 8 zero bytes land on an eventpoll this process just
+# freed; the residual risk is a foreign allocation winning the reclaim slot first.
+panic_risk  = { pre_slide = "low", post_slide = "low" }
+destructive = []   # nothing persistent written; the 8-byte zero hits a just-freed slot
+restores    = []
+provides      = []
+requires_caps = []
+retains       = []
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/badepoll-entry"
+mode = "755"
+# --hunt gates on the ep_loop_check() oracle then races; --max-seconds bounds a
+# shot (round cap is the backstop) and unbuffered stdout survives a mid-shot panic.
+# Append --no-reclaim to provoke a panic deliberately (a foreign alloc takes the slot).
+command = "cd @DEV_TMP@; @DEV_ENTRY@ --hunt 2000000 --max-seconds 120 > @DEV_LOG@ 2>&1"
+accepts_base = false
+# epoll_create1/epoll_ctl/close/dup/timerfd_settime are ungated by SELinux.
+needs_root = false
+
+[markers]
+# The win: epoll_ctl() returns 0 where it must return -ELOOP, i.e. uaf_target->refs.first
+# was zeroed by the UAF write.
+pass = 'a[0-9]+: WIN detected \(round=[0-9]+ launch_ahead=[0-9]+ns close=[0-9]+ns\)'
+gate_fail = 'BADEPOLL_ORACLE_GATE_FAIL'   # oracle arms disagreed: permanent on this kernel
+restore_pass = 'BADEPOLL_NO_SUCH_RESTORE_PASS'   # sentinels: nothing to restore
+restore_bad  = 'BADEPOLL_NO_SUCH_RESTORE_BAD'
+heartbeat = 'BADEPOLL_HEARTBEAT seq=[0-9]+'
+# On a MISS, how far the shot got.
+diag       = '(done: rounds=[0-9]+ wins=[0-9]+ misses=[0-9]+ interrupted=[0-9]+ verdict=[a-z_]+|a[0-9]+: WIN detected).*'
+diag_count = 'rounds=[0-9]+'
+
+# Exit status -> outcome (oracle46242.c EXIT_*); markers win over it.
+#   1 ran, no win -> MISS   2/3 bad argv or setup -> REFUSED   4 oracle unsound -> PRECONDITION_FAIL
+[exit_map]
+"1" = "MISS"
+"2" = "REFUSED"
+"3" = "REFUSED"
+"4" = "PRECONDITION_FAIL"
+
+[provides]
+caps  = []
+field = ''
+label = ""
+
+# NOT a reboot: rounds are independent and a miss changes nothing, so a boot per
+# shot would just cost racing time. The step records the racing conditions instead.
+[[setup]]
+command = "echo badepoll-setup cpus=$(grep -c ^processor /proc/cpuinfo) kernel=$(uname -r)"
+once_per_boot = true
+needs_root = false
+description = "record the racing conditions (cpu count, kernel release) in the shot log"

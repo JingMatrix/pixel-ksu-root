@@ -1,0 +1,227 @@
+# entry.ffwheel-root@6.1 — CVE-2026-43049 FFWheel, ROOT-REQUIRED design check.
+#
+# Builds the SAME ffroot_w.c the entry.ffwheel@6.1
+# recipes compile (byte-identical file, no fork here), standalone (no
+# -DFFCOMPOSE, so it gets its own main() -- the "Standalone builds (ffroot
+# sidecar/DET flows)" path ffroot_w.c's own trailer comment already names).
+# The ONLY difference from those two recipes is which env var selects which
+# of ffroot_w.c's four resolution modes for pipe_inode_info*/cred*/page_va
+# runs: FFREAD_SELFKPROBE=1 here, self-armed root kprobes + this process's own
+# /proc/self/pagemap (needs_root=true routes the whole invocation through
+# `su -c`, like entry.frostbind@6.1) instead of FFREAD_ROOTFREE (KernelSnitch),
+# FFROOT_CROSSCACHE (the cross-cache), or neither (the physmap guess).
+#
+# This is deliberate maximal code reuse, not a parallel implementation: the
+# forge, the offsets, the trigger, and the kernel-TEXT leak (the write-free
+# tracefs leak, kaslr_leak_stext() -- untouched, still root-free, still the
+# same call) are the identical code every FFWheel recipe runs. A bug found or
+# fixed while running entry.ffwheel-root is a fix to ffroot_w.c itself, so it
+# is fixed for entry.ffwheel@6.1 in the same
+# stroke -- that is this recipe's whole purpose (see recipes/ffwheel-root.toml
+# and cves/lib/root/kprobe_read.{c,h}, the new shared primitive this mode
+# is built from).
+#
+# needs_root=true, but the VICTIM is not root: ffroot_w.c forks, the root
+# parent becomes an address oracle and the child drops to CLIENT_UID (2000)
+# before running the exploit. That is what makes the result a real result --
+# with a root writer, cred[uid..fsgid] reads all-zero BEFORE the write as well
+# as after, so "cred is zero" proves nothing and a merge write that silently
+# did nothing is indistinguishable from one that worked. Starting at 2000
+# makes the transition the proof:
+#
+#   BEFORE  cred[uid..fsgid] = 000007d0 x8   (0x7d0 = 2000)
+#   AFTER   cred[uid..fsgid] = 00000000 x8   and the victim's own getresuid()
+#                                             returns 0/0/0
+#   plus    pipe->bufs moved from a live heap pointer to EXACTLY the forged
+#           address this run predicted before triggering anything
+#
+# Both halves of that are read out of raw kernel memory by the PARENT's
+# kprobes, independently of anything the victim reports about itself.
+#
+# What it does NOT establish: the victim inherits its parent's SELinux domain
+# (u:r:ksu:s0), not u:r:shell:s0, so this proves the cred WRITE, not a domain
+# transition -- /proc/1/environ still reads EACCES at uid 0 here. A research
+# milestone, not a capability, so this is a hunt.
+
+schema = 1
+kind   = "entry"
+id     = "entry.ffwheel-root@6.1"
+cve    = "CVE-2026-43049"
+kmi    = ["android14-6.1"]
+
+
+composed = false
+status   = "Root-oracle design-verification hunt: PROVEN uid 2000->0 on hardware. Builds the SAME ffroot_w.c as entry.ffwheel@6.1; forks a root oracle + a CLIENT_UID victim, and the oracle supplies pipe_inode_info*/cred*/entry-page VA via pid-filtered kprobes + pagemap instead of KernelSnitch/crosscache/guess. Kernel text stays on the same root-free tracefs leak, untouched. Verified by the oracle's own kprobe readback of cred (2000 before, 0 after) and pipe->bufs, independently of the victim. SELinux domain is NOT changed, so this is a milestone, not a capability."
+
+[build]
+form    = "static-exe"
+entry   = "main"
+sources = ["cves/cve-2026-43049-ffwheel/ffroot_w.c",
+           "cves/lib/spray/crosscache/crosscache.c",
+           "cves/lib/rw/pipe_rw.c",
+           "cves/lib/trigger/uhid.c",
+           "cves/lib/spray/physspray.c",
+           "cves/lib/spray/skbspray.c",
+           "cves/lib/root/kprobe_read.c",
+           "cves/lib/root/cred.c",
+           "cves/lib/root/kernelsu.c"]
+includes = ["cves"]             # resolves TARGET_HEADER
+depends  = ["cves/cve-2026-43049-ffwheel/ksnitch_mm.h",
+            "cves/cve-2026-43049-ffwheel/ffwheel_forge.h",
+            "cves/lib/spray/crosscache/crosscache.h",
+            "cves/lib/leak/kernelsnitch/kernelsnitch.h",
+            "cves/lib/root/kprobe_read.h",
+            "cves/lib/root/cred.h",
+            "cves/lib/rw/pipe_krw.h",
+            "cves/lib/addr/pagemap.h",
+            "cves/lib/addr/physmap.h",
+            "cves/cve-2026-43049-ffwheel/ffcompose_ipc.h"]
+# KSNITCH_DETACHED_THREADS: parity with entry.ffwheel@6.1's build flags, even
+# though FFREAD_SELFKPROBE never reaches the crosscache/KernelSnitch branch at
+# runtime -- crosscache.c is still linked in (ffroot_w.c references it
+# unconditionally for the FFROOT_CROSSCACHE branch), so keep the same define.
+defines  = ["KSNITCH_DETACHED_THREADS"]
+# -ffunction-sections/-fdata-sections + -Wl,--gc-sections: without them a
+# static NDK build of anything that links crosscache.c (-> KernelSnitch ->
+# pthread_create) refuses to even exec on this device ("executable's TLS
+# segment is underaligned ... needs to be at least 64 for ARM64 Bionic") --
+# a weakly-referenced GWP-ASan TLS symbol in bionic's static libc.a that
+# section GC drops once nothing else pulls in pthreads this way. Not needed
+# by entry.ffwheel@6.1 today only because their
+# cached build artifacts predate this becoming reachable; harmless to add
+# there too if they ever hit the same failure.
+cflags   = ["-std=gnu17", "@OPT@", "-static", "-ffunction-sections", "-fdata-sections", "-Werror"]
+opt      = ["-O2", "-g0"]
+ldflags  = ["-Wl,--gc-sections"]
+output   = "cve-2026-43049-ffwheel-root"
+uses_target_header = true    # structure layouts and symbol offsets
+
+# What this chain reads out of the target description. Declared so that adding a
+# device fails the BUILD with a named, complete list instead of compiling against
+# whatever happens to be defined and putting a wrong address under a write that
+# runs as root.
+#
+# The split is what decides the porting cost. Everything from KIMAGE_TEXT_BASE
+# down is a field offset or a constant of the kernel interface, shared by every
+# device on that interface. The six above it are symbol offsets into one kernel
+# image, so they are identical for every device running the same GKI build and
+# have to be re-measured only when that build changes.
+[facts]
+header = "cves/targets/{target}/target.h"
+requires = [
+  "OFFSET_H", "BUILD_FINGERPRINT",
+  # image symbol offsets -- per kernel build
+  "EP_POLL_CALLBACK_OFF", "ANON_PIPE_BUF_OPS_OFF", "LINUX_BANNER_OFF",
+  "INPUT_DEV_LIST_OFF", "SELINUX_ENFORCING_OFF", "SELINUX_BLOB_SIZES_OFF",
+  # image geometry and the slide floor the recovery is checked against
+  "KIMAGE_TEXT_BASE", "KASLR_SLIDE_MIN", "P0_PAGE_OFFSET", "P0_PHYS_OFFSET",
+  # eventpoll: the objects the wake callback walks
+  "EPITEM_OFF_RDLLINK", "EPITEM_OFF_FFD", "EPITEM_OFF_EP", "EPITEM_OFF_WS",
+  "EPITEM_OFF_EVENT", "EPPOLL_OFF_BASE", "EPPOLL_OFF_WAIT", "EP_OFF_RDLLIST",
+  "EP_OFF_WQ", "EP_OFF_POLL_WAIT", "EP_OFF_LOCK", "EP_OFF_OVFLIST", "EP_OFF_WS",
+  "EP_UNACTIVE_PTR", "WAIT_QUEUE_HEAD_OFF", "WAIT_QUEUE_ENTRY_OFF_ENTRY",
+  # the pipe ring the write is aimed through
+  "PIPE_INODE_OFF_BUFS", "PIPE_BUFFER_SIZE", "PIPE_BUF_FLAG_CAN_MERGE",
+  "PIPE_INODE_OFF_HEAD", "PIPE_INODE_OFF_TAIL", "PIPE_INODE_OFF_RING_SIZE",
+  # the read walk: mm -> owner -> files -> fdt -> fd[] -> file -> private_data,
+  # and the page-table depth the forge page's own address is resolved through
+  "MM_OWNER_OFF", "MM_PGD_OFF", "VA_BITS", "TASK_CRED_OFF", "TASK_FILES_OFF",
+  "FILES_FDT_OFF", "FDT_FD_OFF", "FILE_PRIVATE_DATA_OFF",
+  # credentials
+  "CRED_UID_OFF", "CRED_CAPS_OFF", "CRED_CAP_WORDS", "CRED_ID_BLOCK_BYTES",
+  "CAP_FULL", "SELINUX_KERNEL_SID",
+  # the leaked input_dev the writer neutralises
+  "INPUT_DEV_NAME_OFF", "INPUT_DEV_USERS_OFF", "INPUT_DEV_NODE_OFF",
+  # mm_struct slab geometry, for the side-channel leak
+  "MM_STRUCT_SZ", "MM_ORDER",
+]
+forbids = []
+
+[properties]
+retry_safe  = true
+panic_risk  = { pre_slide = "high", post_slide = "high" }
+destructive = ["uhid UAF collateral, permanent until reboot (may panic InputReader, or init later)", "victim's pipe_inode_info->bufs redirected (victim parks forever, must never be killed)", "victim's cred uid/gid zeroed (2000 -> 0)"]
+restores    = []
+provides      = []
+requires_caps = []
+retains       = []
+# Measured: every shot reaches FFROOT_W_SELFKPROBE_CONFIRMED (or a MISS) within
+# ~2-5s and then parks forever with no heartbeat, so pixel-ksu-root's generic
+# SHOT_TIMEOUT default (240s, derived from a 77-392s slow-probabilistic-exploit
+# spread) would sit silently for four full minutes on every single shot for no
+# reason. 20s leaves ~4x headroom. root_max=1: this recipe is one shot per
+# boot BY DESIGN (see the [[setup]] comment below) -- su does not survive the
+# reboot a PARKED shot triggers, so a second automatic attempt can only ever
+# fail "needs root, none available"; retrying is the operator's job (reboot,
+# re-root, run again), not the runner's.
+root_max      = 1
+shot_timeout  = 20
+# The live progress display samples the device log every progress_every
+# seconds and only reprints when the line changes. The runner-wide default of
+# 15s is longer than this entire shot, so an operator watching stdout sees one
+# sparse sample and nothing else; at 1s they see the actual progression
+# (KASLR, pipe_inode_info, cred, page_va, forge, probe, spray, verdict).
+progress_every = 1
+
+[invoke]
+kind = "device-exec"
+artifact_source = "build"
+dest = "/data/local/tmp/cve43049-ffwheel-root"
+mode = "755"
+# FFREAD_SELFKPROBE: the one new mode ffroot_w.c gains, selecting the
+# self-armed-kprobe + self-pagemap resolution over the other three (unset
+# here: FFREAD_ROOTFREE, FFROOT_CROSSCACHE, FFREAD_DET all stay off).
+#
+# accepts_base + @KASLR_ENV@: the KASLR base is leaked ONCE PER BOOT in a
+# process of its OWN (ffroot_w.c's KASLR_LEAK_ONLY branch: leak, print
+# "slide-kaslr-tracefs-ok ... base=<hex>", exit) and replayed into the real
+# shot as KASLR_BASE -- the same shape ghostlock and entry.ffwheel@6.1 use.
+# The runner prints the leaked base on ITS OWN stdout
+# (exploit.sh: "KASLR base <hex> (leaked in its own process...)"), which is
+# where an operator can actually see it; leaking inline in the shot instead
+# buries it in the device log and leaves the racing process to start on a
+# page allocator the leak just drained.
+command = "cd @DEV_TMP@; FFREAD_SELFKPROBE=1 FFROOT_ENFORCE0=1 FFROOT_NEUT=1 @KASLR_ENV@@DEV_ENTRY@ > @DEV_LOG@ 2>&1"
+accepts_base = true
+# Runs as root: arms its own kprobes on tracefs (kprobe_events, filters) and
+# reads /proc/self/pagemap, both root-only on this build.
+needs_root = true
+
+[markers]
+# Two alternatives, as entry.ffwheel@6.1 does: the leak-only pre-run's slide
+# line (the runner matches this to extract and cache the base, and prints it)
+# and the real shot's verdict.
+pass = '(slide-kaslr-tracefs-ok pid=[0-9]+ base=[0-9a-f]+|FFROOT_W_SELFKPROBE_CONFIRMED)'
+gate_fail = 'FFROOT_W_NO_SUCH_GATE_FAIL'
+restore_pass = 'FFROOT_W_NO_SUCH_RESTORE_PASS'
+restore_bad  = 'FFROOT_W_NO_SUCH_RESTORE_BAD'
+# A REAL heartbeat (ffroot_w.c beat()), not a sentinel: it is what lets the
+# runner tell "still advancing" from "hung", and what gives its live progress
+# display a changing line to print for a shot this short.
+heartbeat    = 'FFROOT_W_HEARTBEAT seq=[0-9]+'
+diag       = '(no pipe_inode_info supplied|no cred VA supplied|no page_va|FFROOT_W_SELFKPROBE_MISS.*|tracefs KASLR leak failed)'
+diag_count = ''
+
+[provides]
+caps  = []
+# The field inside the pass marker carrying the value this stage yields, so
+# the leak-only pre-run's base can be extracted and replayed (MARK_BASE_FIELD).
+field = 'base=[0-9a-f]+'
+label = "base"
+
+# NOT a reboot: root here is an su left by a baseline root (e.g. ghostlock)
+# earlier on this boot, and a reboot would take it away and REFUSE every later
+# shot -- entry.dirtyfrag-write@6.1's exact rationale, same device fact (su
+# does not survive reboot here). The uhid UAF leak this stage causes IS
+# permanent until reboot, so repeat shots on a used-up boot are expected to
+# degrade -- this recipe is one shot per boot BY DESIGN: reboot, re-root
+# (e.g. ghostlock), run this once, reboot again before the next attempt. The
+# step records that a root shell answers (uid=0) and on which kernel;
+# needs_root so setup_precheck() fails the run up front with the command to
+# run first, rather than silently rebooting the su away.
+[[setup]]
+reboot = false
+command = "echo ffwheel-root-setup uid=$(id -u) kernel=$(uname -r) uptime=$(cut -d. -f1 /proc/uptime)s"
+needs_root = true
+once_per_boot = true
+description = "record that a root shell answers on this boot (uid=0) and which kernel it answers on"
