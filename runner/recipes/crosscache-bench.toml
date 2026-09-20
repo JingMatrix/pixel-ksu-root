@@ -36,6 +36,7 @@ stages = []
 
 [entry]
 "android14-6.1" = "bench.crosscache@6.1"
+"qgki-5.4"       = "bench.crosscache@qgki-5.4"
 
 [goals]
 all     = ["entry"]

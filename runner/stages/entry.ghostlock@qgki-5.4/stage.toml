@@ -1,0 +1,169 @@
+# entry.ghostlock@qgki-5.4 — GhostLock entry, Samsung QGKI 5.4.
+#
+# Same source set as entry.ghostlock@6.1: LIB_KMI=54 takes the LIB_KMI<66
+# path, every LIB_KMI guard in these sources testing only `< 66` / `>= 66`.
+
+schema = 1
+kind   = "entry"
+id     = "entry.ghostlock@qgki-5.4"
+cve    = "CVE-2026-43499"
+kmi    = ["qgki-5.4"]
+
+composed = true
+status   = "roots on hardware end-to-end. DEFEX safeplace SIGKILLs root execve of /data binaries, so module scripts and Manager ksud calls need the KernelSU-side deferred-exec handling."
+
+# Tunables come from the shared fragments listed below; each fragment's own
+# header states what it covers.
+tunables_from = ["runner/stages/_shared/ghostlock-vehicle-select.toml",
+                 "runner/stages/_shared/ghostlock-vehicle-knobs.toml",
+                 "runner/stages/_shared/ghostlock-vehicle-knobs-pselect.toml"]
+
+[build]
+form    = "preload-so"
+entry   = "constructor"
+sources = [
+  "cves/cve-2026-43499-ghostlock/main.c",
+  "cves/cve-2026-43499-ghostlock/util.c",
+  "cves/cve-2026-43499-ghostlock/util_config.c",
+  "cves/cve-2026-43499-ghostlock/util_addr.c",
+  "cves/lib/rw/nameblob.c",
+  "cves/lib/kaslr/slide_tracefs.c",
+  "cves/cve-2026-43499-ghostlock/fops.c",
+  "cves/cve-2026-43499-ghostlock/fops_pselect.c",
+  "cves/cve-2026-43499-ghostlock/fops_tcp.c",
+  "cves/cve-2026-43499-ghostlock/fops_sigreturn.c",
+  "cves/cve-2026-43499-ghostlock/fops_clone3.c",
+  "cves/cve-2026-43499-ghostlock/fops_process_vm.c",
+  "cves/cve-2026-43499-ghostlock/fops_bpf.c",
+  "cves/cve-2026-43499-ghostlock/fops_mcast.c",
+  "cves/cve-2026-43499-ghostlock/fops_sockopt.c",
+  "cves/cve-2026-43499-ghostlock/pipe.c",
+  "cves/cve-2026-43499-ghostlock/pipe_rw.c",
+  "cves/lib/rw/pipe_rw.c",
+  "cves/lib/spray/crosscache/crosscache.c",
+  "cves/cve-2026-43499-ghostlock/root.c",
+  "cves/lib/root/cred.c",
+  "cves/lib/root/taskscan.c",
+  "cves/lib/root/install_umh.c",
+  "cves/lib/root/handoff.c",
+  "cves/cve-2026-43499-ghostlock/preload.c",
+]
+includes = ["cves/cve-2026-43499-ghostlock", "cves"]
+depends  = ["cves/cve-2026-43499-ghostlock/*.h", "cves/lib/leak/kernelsnitch/*.h",
+            "cves/lib/spray/crosscache/crosscache.h", "cves/lib/rtmutex/*.h",
+            "cves/lib/root/*.h"]
+defines  = ["APP_PAYLOAD=1", "LIB_KMI=54"]
+cflags   = ["-include", "offset.h", "-fPIC", "@OPT@", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-sign-compare"]
+opt      = ["-O2", "-g0"]
+ldflags  = ["-shared", "-pthread", "-Wl,--no-undefined"]
+output   = "cve-2026-43499-ghostlock"
+
+[build.release]
+opt     = ["-Oz", "-g0", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
+           "-ffunction-sections", "-fdata-sections"]
+ldflags = ["-shared", "-pthread", "-Wl,--gc-sections", "-Wl,--icf=all", "-s", "-Wl,--no-undefined"]
+output  = "cve-2026-43499-ghostlock.release"
+
+[facts]
+header = "cves/targets/{target}/target.h"
+requires = [
+  "OFFSET_H", "BUILD_VARIANT_LABEL", "BUILD_FINGERPRINT",
+  "INIT_TASK", "INIT_TASK_OFF",
+  "ASHMEM_MISC_FOPS", "ASHMEM_MISC_FOPS_OFF", "ASHMEM_FOPS", "ASHMEM_IOCTL",
+  "KMALLOC_CACHES", "KMALLOC_CACHES_OFF",
+  "P0_PAGE_OFFSET", "P0_PHYS_OFFSET", "P0_KERNEL_PHYS_LOAD", "KIMAGE_TEXT_BASE",
+  "PIPE_BUFFER_SIZE", "PIPE_BUFFER_SLOTS",
+  "SLIDE_INIT_TASK_IMAGE", "SLIDE_LOGGERS_0_1_IMAGE", "SLIDE_SYSCTL_BOOTID_IMAGE",
+  "TASK_CRED_OFF", "TASK_REAL_CRED_OFF", "CRED_UID_OFF",
+  "SELINUX_ENFORCING", "SECURITY_HOOK_HEADS",
+  "MM_STRUCT_SZ", "KMALLOC_CGROUP_TYPE", "KMALLOC_CACHE_TYPES",
+  "KMALLOC_PIPE_INDEX", "PSELECT_WAITER_WORD_SHIFT",
+  # Read by tcp_gate_check() (fops_tcp.c) at run time; without it that
+  # vehicle's own precondition check cannot answer whether it applies here.
+  "KERNEL_VERSION_CODE",
+]
+forbids = []
+
+[properties]
+retry_safe  = true
+panic_risk  = { pre_slide = "high", post_slide = "low" }
+destructive = ["slide_logger_parent_slot", "ashmem_miscs[0].fops"]
+restores    = ["repair_logger_slot", "restore_fops_ptr_and_owner"]
+provides    = ["CAP_SLIDE", "CAP_KRW_C"]
+requires_caps = []
+retains     = ["CAP_KRW_C"]
+# Confirmed on hardware: OneDrive and YANA (an ad-SDK-heavy lock-screen app
+# whose own BootCompleteListener fires within ~2s of every boot) each create
+# WebView renderer processes that raced the live ashmem misc_open collateral
+# window (README, "Collateral") and panicked the device. Disabled once before
+# the first reboot, re-enabled once after the run ends.
+disable_apps = ["com.microsoft.skydrive", "de.axelspringer.yana.zeropage"]
+
+# Samsung's DEFEX LSM (security/samsung/defex_lsm) denies execve of
+# anything outside a fixed, compiled-in path whitelist
+# (defex_rules.c's feature_safeplace_path entries) once the calling task is
+# already root -- exactly install_ksu()'s late-load step, exactly this
+# device. su_daemon.c's run_s25u_late_load() (triggered by install.sh)
+# bind-mounts the staged ksud over this path, inside a private mount
+# namespace it opens for itself, and execs from there instead -- a real
+# bind mount via the mount(2) syscall, not a shell/toybox invocation.
+# /system/bin/procrank was chosen over the ~150 other whitelisted paths
+# because it is never invoked by any Android subsystem on its own (a
+# standalone memory-diagnostic tool run only by hand at a terminal, unlike
+# e.g. logcat or toybox, which see real, unpredictable traffic even in a
+# short window), confirmed present on this device, and not one of the
+# separate, much shorter feature_integrity_check paths. Empty/absent on a
+# target with no DEFEX-equivalent obstacle -- install.sh execs the staged
+# ksud directly in that case, no mount involved.
+defex_shadow_path = "/system/bin/procrank"
+
+# No manager ships a prebuilt kernelsu.ko for qgki-5.4 -- confirmed absent
+# from every release channel checked (ghcr.io/ylarod/ddk-min's oldest GKI
+# tag is android12-5.10; KernelSU_Next's own releases are named by KMI the
+# same way). ksud's own module loader (ksuinit's load_module()) relocates
+# the module against live kallsyms by symbol name rather than requiring an
+# exact vermagic/KMI match, so a module built for a *different* KMI can
+# still load as long as the struct layouts it assumes still hold on this
+# kernel -- untested here beyond "it loads", not a claim that every hook
+# behaves correctly. LATE_LOAD_KMI is what install.sh actually passes to
+# ksud (see install.sh's own LATE_LOAD_KMI comment); this property
+# substitutes a different value for it than the real, detected $KMI
+# (qgki-5.4, which no release matches), so ksud fetches/uses the
+# android12-5.10 module instead of failing to find one for this device at
+# all. Empty on a target with a real matching release channel -- install.sh
+# then falls back to the true detected KMI, today's behavior.
+late_load_kmi_override = "android12-5.10"
+
+# The shared fops_pselect.c painting routine's word map; entry.ghostlock@6.1
+# states what the fields mean and how the PSELECT_SHIFT window derives.
+[pselect_map]
+nfds = 320
+first_word = 2
+lock_word = 9
+
+[invoke]
+kind = "helper-preload"
+artifact_source = "runner"
+dest = "/data/local/tmp/exploit-payload.so"
+mode = "755"
+command = "cd @DEV_TMP@; @KASLR_ENV@SU_CLIENT_UID=@CLIENT_UID@ SU_APP_UID=@APP_UID@        @DEV_HELPER@ --run-payload @DEV_PAYLOAD@ @DEV_HELPER@ @DEV_LOG@ >/dev/null 2>&1"
+accepts_base = true
+
+[markers]
+pass         = 'slide-kaslr-tracefs-ok pid=[0-9]+ base=[0-9a-f]+'
+gate_fail    = '[A-Z][A-Z0-9_]*_GATE_FAIL'
+restore_pass = '[A-Z][A-Z0-9_]*_RESTORE_PASS'
+restore_bad  = '[A-Z][A-Z0-9_]*_(RESTORE_NOT_PROVEN|RESTORE_UNREACHABLE|RESTORE_FAIL)'
+heartbeat    = '[A-Z][A-Z0-9_]*_HEARTBEAT[[:space:]]+seq=[0-9]+'
+diag         = '(tcp|sigreturn|pselect|clone3|process_vm|bpf) route done=[0-9]+.*'
+diag_count   = 'cfi misses=[0-9]+'
+
+[exit_map]
+
+[provides]
+caps  = ["CAP_SLIDE", "CAP_KRW_C"]
+field = 'base=[0-9a-f]+'
+label = "base"
+
+[[setup]]
+reboot = true

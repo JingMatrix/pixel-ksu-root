@@ -261,13 +261,14 @@ bias and lands `PHYS_PFN_OFFSET * sizeof(struct page)` bytes too high.
 
 Two different quantities are involved here and conflating them produces a subtly wrong answer.
 `STRUCT_PAGE_MAX_SHIFT` is `order_base_2(sizeof(struct page))` (`include/linux/mm_types.h`), the rounded-up
-power of two that sizes the vmemmap region through `VMEMMAP_SHIFT = PAGE_SHIFT - STRUCT_PAGE_MAX_SHIFT` and
-hence `VMEMMAP_START = -(1UL << (VA_BITS - VMEMMAP_SHIFT))` — both in the same
-[`arch/arm64/include/asm/memory.h`](https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/arch/arm64/include/asm/memory.h?h=v6.1)
-as `PAGE_OFFSET` above. The stride of `vmemmap[pfn]`, though, is the actual
-`sizeof(struct page)`. They agree at 64 bytes and diverge below it: a 56-byte `struct page` still rounds to
-`STRUCT_PAGE_MAX_SHIFT = 6` and still gives `VMEMMAP_START = -(1 << 33) = 0xfffffffe00000000` on a
-`VA_BITS=39`, 4KB-page kernel, but the bias becomes `0x80000 * 56` = 28 MiB instead of 32 MiB.
+power of two used to size the vmemmap region. The stride of `vmemmap[pfn]`, though, is the actual
+`sizeof(struct page)`. The address formula for `VMEMMAP_START` is kernel-source and configuration dependent;
+do not substitute a formula from another kernel version. In the qgki-5.4 source used by the A52s target,
+`arch/arm64/include/asm/memory.h` defines `VMEMMAP_SIZE = (_PAGE_END(VA_BITS_MIN) - PAGE_OFFSET) >>
+(PAGE_SHIFT - STRUCT_PAGE_MAX_SHIFT)` and `VMEMMAP_START = -VMEMMAP_SIZE - SZ_2M`. With `VA_BITS=39`, 4K
+pages, and 64-byte descriptors, that gives `VMEMMAP_SIZE=4 GiB` and `VMEMMAP_START=0xfffffffeffe00000`.
+Other kernels may use a different layout formula. Independently of that base address, a 56-byte `struct page`
+still has `STRUCT_PAGE_MAX_SHIFT = 6`, but its descriptor stride is 56 bytes rather than 64.
 
 So measure the size rather than assuming 64. BTF carries it, which means `pahole` answers it without a kernel
 build:
@@ -285,13 +286,14 @@ A worked example with `PHYS_OFFSET = 0x80000000` (so `PHYS_PFN_OFFSET = 0x80000`
 and the frame at physical `0x123456000`, i.e. PFN `0x123456`:
 
 ```
-correct:   0xfffffffe00000000 + (0x123456 - 0x80000) * 0x40 = 0xfffffffe028d1580
-unbiased:  0xfffffffe00000000 +  0x123456           * 0x40 = 0xfffffffe048d1580
+correct:   0xfffffffeffe00000 + (0x123456 - 0x80000) * 0x40 = 0xffffffff026d1580
+unbiased:  0xfffffffeffe00000 +  0x123456           * 0x40 = 0xffffffff046d1580
 error:     0x2000000 = 32 MiB
 ```
 
 `VMEMMAP_SIZE` on this configuration is `(_PAGE_END(39) - PAGE_OFFSET) >> 6` = `0x4000000000 >> 6` =
-`0x100000000`, so the region runs `[0xfffffffe00000000, 0xffffffff00000000)` and *both* addresses lie inside it.
+`0x100000000`; the qgki-5.4 source places its start at `-0x100200000`, so the region runs
+`[0xfffffffeffe00000, 0xffffffffffe00000)` and *both* addresses lie inside it.
 A range check on the result cannot tell them apart; the wrong one is a well-formed pointer to the descriptor of
 some other frame 32 MiB of descriptors away, and nothing complains until it is dereferenced or, worse, written.
 Derive the constants for your own configuration, then check them against a descriptor pointer you have actually
@@ -355,7 +357,8 @@ that never fired, both present as an absent or zero-valued line, so a zero is no
 until `kprobe_profile` shows a nonzero `nhit` for `peek`. That is also why the probe site matters: pick a
 syscall you are certain to enter, and filter to the process that will enter it so an unrelated caller's hit is
 not mistaken for yours. `__arm64_sys_getpid` is a poor choice, because the libc wrapper caches the result and a
-process that has already called it never enters the kernel again — a trap this project has been caught by.
+process that has already called it never enters the kernel again, so a probe on it can go unfired for reasons
+that have nothing to do with the address under test.
 `__arm64_sys_newuname` driven by a `uname` call is unambiguous, and `uname` runs in its own process, which is
 why the filter matches on `comm` rather than on the shell's own pid.
 
@@ -706,9 +709,10 @@ bpftool btf dump file btf.bin format c | head           # proof: it parses, and 
 ```
 
 The last line is the check that matters — a slice off by a byte still produces a file, and only a parse proves
-the bounds were right. On panther the slice is byte-identical to the `/sys/kernel/btf/vmlinux` harvested from
-the phone. This repository does it in `runner/scripts/lib/offset_rules.py` (`btf_from_image()`, which also
-verifies the BTF magic at the slice start), with `runner/scripts/lib/btf_offsets.py` parsing either source.
+the bounds were right; the same blob read straight off a live device's `/sys/kernel/btf/vmlinux` is the reference
+to diff the slice against when both routes are available. This repository does it in
+`runner/scripts/lib/offset_rules.py` (`btf_from_image()`, which also verifies the BTF magic at the slice start),
+with `runner/scripts/lib/btf_offsets.py` parsing either source.
 
 For symbols, `/proc/kallsyms` is the direct route, and by the `kallsyms_show_value()` rule above it usually
 yields a table of zeros rather than an error. Handle that case explicitly: code that does not check will compute

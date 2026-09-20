@@ -21,6 +21,7 @@ stages = ["handoff.suhelper"]
 [entry]
 "android14-6.1" = "entry.ghostlock@6.1"
 "android15-6.6" = "entry.ghostlock@6.6"
+"qgki-5.4"       = "entry.ghostlock@qgki-5.4"
 
 [goals]
 all     = ["entry", "handoff.suhelper"]

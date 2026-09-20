@@ -1,0 +1,46 @@
+# runner/recipes/ghostlock-vehicle-bench.toml — watch a real GhostLock
+# reclaim vehicle land (or not), from outside, on a boot that already has
+# root.
+#
+# By default it drives the real payload with the race armed and observes the
+# selected vehicle. Its launch identity and route tunables match the root
+# recipe. Passive monitoring tails payload output and scans once at the endpoint
+# to keep observation overhead out of route timing. Set MONITOR_PASSIVE=0 to
+# enable repeated scans and hardware instrumentation. MONITOR_ARM=0 changes
+# route timing and is not performance-comparable.
+#
+#     make TARGET=panther-CP2A.260705.006 RECIPE=ghostlock                # entry + payload
+#     ./pixel-ksu-root --recipe ghostlock                                 # root first, real boot
+#     make TARGET=panther-CP2A.260705.006 RECIPE=ghostlock-vehicle-bench  # build the monitor
+#     ./pixel-ksu-root --recipe ghostlock-vehicle-bench --tunable RECLAIM_VEHICLE=clone3
+#
+# On the A52s (5.4), instrumented mode can walk the loader's thread group to
+# find the blocked waiter pthread and report a per-class VERDICT line:
+#     make TARGET=a52sxq-A528BXXSBGYI3 RECIPE=ghostlock                       # entry + payload
+#     ./pixel-ksu-root --recipe ghostlock                                    # root first, real boot
+#     make TARGET=a52sxq-A528BXXSBGYI3 RECIPE=ghostlock-vehicle-bench         # build the monitor
+#     ./pixel-ksu-root --recipe ghostlock-vehicle-bench --tunable RECLAIM_VEHICLE=sockopt
+#
+# That order is a precondition, not a convenience; the stage manifest's
+# [[setup]] step states it.
+#
+# Magisk or KernelSU root is required for observation. The vehicle table is the
+# real one (cves/cve-2026-43499-ghostlock/util_config.c). Passive mode keeps
+# repeated observer scans out of route timing; enable instrumentation when its
+# event-level measurements are needed.
+
+schema      = 1
+name        = "ghostlock-vehicle-bench"
+description = "watch a real GhostLock reclaim vehicle's forged waiter land (or not), read back as root; an instrument, not an exploit."
+default     = false
+
+# No handoff: this produces a log, not a capability.
+stages = []
+
+[entry]
+"android14-6.1" = "bench.ghostlock-vehicle@6.1"
+"qgki-5.4"       = "bench.ghostlock-vehicle@qgki-5.4"
+
+[goals]
+all     = ["entry"]
+release = ["entry"]

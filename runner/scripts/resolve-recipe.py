@@ -61,6 +61,7 @@ TARGETS_JSON = os.path.join(ROOT, "data", "targets.json")
 KMI_MARKER = {
     "android14-6.1": "TARGET_KMI_ANDROID14_6_1",
     "android15-6.6": "TARGET_KMI_ANDROID15_6_6",
+    "qgki-5.4": "TARGET_KMI_QGKI_5_4",
 }
 
 DEFINE_RE = re.compile(r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)")
@@ -862,8 +863,8 @@ def main():
         # bug carries it too and must be allowed through -- an allow-list
         # refuses exactly those, which is backwards. And a kernel newer than
         # the fix cannot be assumed to have it: a branch backports on its own
-        # schedule, and panther's CP2A.260705.006 is dated four months after
-        # the CVE-2026-43049 fix reached the ACK while its kernel lacks it.
+        # schedule, so a build's date bounds only how new its kernel can be,
+        # never which upstream fixes it actually received.
         #
         # runner/scripts/lib/vuln_status.py holds the reasoning and the record;
         # what it cannot place it says so about, and names the one command that
