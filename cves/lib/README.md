@@ -60,6 +60,7 @@ where the kernel was loaded; the arm64 layout that makes this true is documented
 | `ipc.h` | a one-line handshake between the halves of a split chain |
 | `timing.h` | the cycle counter a side channel measures with |
 | `procinfo.h` | free memory and allocator readings |
+| `compaction.h` | buddy-allocator free-block counts by order, and forcing a favorable state (root or root-free) |
 | `steplog.h` | how far a run got, written so it outlives the run |
 | `rthold.h` | take a processor from what is running on it, for as long as a window lasts |
 | `outcome.h` | the four things a run can report, and why they differ |

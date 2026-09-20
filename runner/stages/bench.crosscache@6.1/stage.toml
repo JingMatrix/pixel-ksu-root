@@ -124,6 +124,8 @@ command = "cd @DEV_TMP@; { echo === baseline leak child unpinned ===; CC_LEAK_PI
 #   adb shell /data/local/tmp/crosscache-bench --calibrate-signal 2048
 #   adb shell /data/local/tmp/crosscache-bench --pcp-trial 64 --pcp-order 3 --pcp-spray-n 500
 #   adb shell /data/local/tmp/crosscache-bench --pspray-calibrate 8192
+#   adb shell /data/local/tmp/crosscache-bench --compact --rounds 100 --method stream --nspray 64
+#   adb shell /data/local/tmp/crosscache-bench --compact-madvise 64 --rounds 100 --method stream --nspray 64
 # --precede-leak 1 (default 0): before every round's own placement, runs an
 # UNRELATED KernelSnitch leak against the identical mm_struct/order-3 class
 # (the exact call cves/cve-2026-43049-ffwheel/ksnitch_mm.h's leak_own_mm()

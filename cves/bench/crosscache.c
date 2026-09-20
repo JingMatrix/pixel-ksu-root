@@ -25,6 +25,7 @@
  */
 #define _GNU_SOURCE
 
+#include <errno.h>
 #include <fcntl.h>
 #include <sched.h>
 #include <stdio.h>
@@ -38,6 +39,7 @@
 
 #include "../lib/spray/crosscache/crosscache.h"
 #include "../lib/rw/kprobe_read.h"
+#include "../lib/base/compaction.h"   /* buddy-allocator state and compaction control */
 #include "../lib/base/cycles.h"       /* cycle-accurate timing, SLUBStick's own probe uses the x86 equivalent */
 #include "../lib/base/outcome.h"
 #include "../lib/addr/pagemap.h"      /* ground-truth PFNs, in place of PCP-LOST's own kernel module */
@@ -132,6 +134,28 @@ static size_t g_pcp_spray_n = 500;   /* their own main()'s spray_msgs(500) count
 static size_t g_pspray_n;      /* 0: not requested. Set: run bench_pspray_calibrate() alone and exit. */
 static size_t g_pspray_warmup; /* 0 with g_pspray_n set: use BENCH_PSPRAY_WARMUP. */
 static size_t g_pspray_bytes = 64;   /* per-send size; order_size*2 matches the real reclaim's own sizing (cc_frag_len). */
+/* `stream`'s own send is `send_bytes` verbatim, unlike `direct`/`swap`'s wire
+ * size (always cc_frag_len(order_size), independent of this). BENCH_SEND_BYTES
+ * (0x8000) is exactly HALF of cc_frag_len for this device's order-3 config
+ * (0x10000) -- traced against the real kernel arithmetic
+ * (unix_stream_sendmsg -> alloc_skb_with_frags), a 0x8000-byte stream send
+ * collapses to a single, unpadded order-3 fragment with near-zero header,
+ * while 0x10000 carries the same extra order-1/order-2 activity `direct`'s
+ * datagram sends do -- which the CC_FRAG_BYTES finding above measured as
+ * landing BETTER, not worse. Worth sweeping to see whether `stream`'s own gap
+ * against `direct` closes at the same wire size; 0 keeps BENCH_SEND_BYTES. */
+static size_t g_send_bytes;
+/* Whether the buddy allocator holds any free blocks above order 3 is this
+ * reclaim's dominant variable (crosscache/README.md, "Where the difficulty
+ * is"). --compact forces that state via /proc/sys/vm/compact_memory, once
+ * before the round loop (root; this bench already requires it).
+ * --compact-madvise N is the root-free equivalent: mmap and touch an
+ * N-megabyte anonymous region, then madvise(MADV_COLLAPSE) it, forcing
+ * synchronous compaction of that one mapping through the same kcompactd
+ * path -- weaker, since it reaches one mapping rather than the whole
+ * system, and size-capped (see crosscache/README.md). */
+static int g_compact;
+static size_t g_compact_madvise_mb;
 #ifndef BENCH_LATENCY_SAMPLES
 #define BENCH_LATENCY_SAMPLES 32
 #endif
@@ -730,6 +754,24 @@ static unsigned bench_judge_pipe(uintptr_t base, unsigned long long anon_pipe_bu
     return matches;
 }
 
+/* /proc/buddyinfo's Node 0 line reads e.g.
+ *   Node 0, zone   Normal  82258  54394  18049   3737      0      0      0
+ * -- free block COUNTS at order 0, 1, 2, ..., with a text header of varying
+ * token count in front. Skipping every token that does not parse as a bare
+ * integer, rather than a fixed skip count, survives a header shape this
+ * function does not otherwise depend on. Root-only; returns -1 if the file
+ * cannot be read (this bench already requires root for its own judge, so
+ * that should not happen once the gate above has passed). */
+/* Buddy-allocator state and compaction control live in
+ * cves/lib/base/compaction.h, for any consumer that reclaims a page at a
+ * specific order, not only this bench. */
+static void bench_trigger_compact_madvise(size_t mb)
+{
+    int rc = lib_compact_madvise(mb);
+
+    printf("COMPACT_MADVISE mb=%zu ret=%d errno=%d\n", mb, rc, rc < 0 ? errno : 0);
+}
+
 /* One placement, judged.
  *
  * The page is read before the groom's state is released, not after. Which of
@@ -749,6 +791,10 @@ static void bench_round(const struct crosscache_method *method,
      * otherwise, and silence cannot be told from a stall. */
     printf("BENCH_ROUND attempt=%d method=%s nspray=%zu\n", round, method->name,
            req->nspray);
+    /* Unconditional: compaction state is this reclaim's dominant variable
+     * (crosscache/README.md), so every round's own log carries it. -1 means
+     * /proc/buddyinfo could not be read. */
+    printf("  BUDDY ord4+=%ld\n", lib_buddyinfo_sum_ge(4));
 
     if (g_precede_leak) {
         double secs = bench_precede_leak();
@@ -819,17 +865,27 @@ static void bench_series(const struct crosscache_method *method,
     req.compose = bench_compose;
     req.inspect = bench_inspect;
     req.user = t;
-    req.send_bytes = BENCH_SEND_BYTES;
+    req.send_bytes = g_send_bytes ? g_send_bytes : BENCH_SEND_BYTES;
     req.nspray = nspray;
 
     printf("\n");
     printf("  method %s, %zu refill send%s per placement -- %s\n", method->name,
            nspray, nspray == 1 ? "" : "s", method->summary);
+    {
+        char line[256];
+        printf("  BUDDYINFO before: %s\n",
+               lib_buddyinfo_line(line, sizeof(line)) == 0 ? line : "(unreadable)");
+    }
     printf("  round  page                 verdict\n");
     printf("  -----  -------------------  --------------------------------\n");
     for (int round = 1; round <= rounds; round++)
         bench_round(method, &req, round, t);
     printf("  -----  -------------------  --------------------------------\n");
+    {
+        char line[256];
+        printf("  BUDDYINFO after:  %s\n",
+               lib_buddyinfo_line(line, sizeof(line)) == 0 ? line : "(unreadable)");
+    }
 }
 
 /* Parse "1,2,4,8" into the spray counts to try, in order. */
@@ -905,6 +961,13 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[i], "--pspray-bytes")) {
             g_pspray_bytes = (size_t)strtoul(argv[i + 1], NULL, 0);
             if (!g_pspray_bytes) g_pspray_bytes = 64;
+        } else if (!strcmp(argv[i], "--send-bytes")) {
+            g_send_bytes = (size_t)strtoul(argv[i + 1], NULL, 0);
+        } else if (!strcmp(argv[i], "--compact")) {
+            g_compact = 1;
+        } else if (!strcmp(argv[i], "--compact-madvise")) {
+            g_compact_madvise_mb = (size_t)strtoul(argv[i + 1], NULL, 0);
+            if (!g_compact_madvise_mb) g_compact_madvise_mb = 64;
         } else if (!strcmp(argv[i], "--method")) {
             const char *s = argv[i + 1];
 
@@ -971,6 +1034,19 @@ int main(int argc, char **argv)
          * their own kernel module gave them the same fact for free. */
         bench_pcp_trial(g_pcp_trial_n, g_pcp_order, g_pcp_spray_n);
         return LIB_OUTCOME_PASS;
+    }
+
+    if (g_compact || g_compact_madvise_mb) {
+        char line[256];
+
+        printf("  BUDDYINFO before compact: %s\n",
+               lib_buddyinfo_line(line, sizeof(line)) == 0 ? line : "(unreadable)");
+        if (g_compact)
+            lib_compact_root();
+        if (g_compact_madvise_mb)
+            bench_trigger_compact_madvise(g_compact_madvise_mb);
+        printf("  BUDDYINFO after compact:  %s\n",
+               lib_buddyinfo_line(line, sizeof(line)) == 0 ? line : "(unreadable)");
     }
 
     raise_descriptor_limit();

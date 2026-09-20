@@ -38,7 +38,7 @@ moved from one to the other and the only thing that changes is how often the ref
 |---|---|---|
 | `swap` | takes the page with filler bytes, reads the address, then exchanges it a second time for the real payload | the caller owns the victim and can free it on its own schedule |
 | `direct` | reads the address while the victim is still alive, composes the payload, then gives the page up once | the same, plus the address must be readable before the free |
-| `stream` | same as `direct`, refilled over a connection-oriented socket instead of a datagram | the receiving allocator only shapes correctly behind a stream send's own path |
+| `stream` | same as `direct`, refilled over a connection-oriented socket instead of a datagram, `nspray` independent sockets each sent once (`CC_STREAM_MULTI`, on by default) | the receiving allocator only shapes correctly behind a stream send's own path |
 | `pipe-bare` | refills with real `pipe_buffer` arrays over a stream hold, no shaping pass, the leak run in a forked child so the groom that builds the drain/reclaim pools never shares a process with it | the consumer wants a kernel object at the page, not its own bytes, and supplies no `compose` |
 
 `pipe-bare` measures 0/30 landed in each of two independent bench runs (60 rounds total,
@@ -126,6 +126,43 @@ is what frees the target page, synchronously, on whichever CPU the scheduler had
 on, and a refill pinned to a different one is racing a free it cannot see land. Every child
 in the same groom pins itself for the same reason.
 
+`stream`'s own socket structure -- whether the `nspray` refill attempts are `nspray`
+independent sockets, each sent once (`CC_STREAM_MULTI`), or one socket sent to `nspray` times
+in a row -- is a real, modest lever. Measured against a matched baseline, independent sockets
+hold a consistent edge over the repeated-single-socket form; `CC_STREAM_MULTI` defaults on for
+that reason, with `=0` reaching the single-socket form for comparison. It is a minor effect
+next to the one below.
+
+The dominant variable in this whole module is not a socket structure or a timing choice at
+all: it is whether the buddy allocator currently holds any free blocks above order 3, readable
+directly from `/proc/buddyinfo` (root; the columns are free block counts at order 0, 1, 2,
+...). `mm/page_alloc.c`'s `__rmqueue_smallest()` checks order 3's own free list first and only
+climbs to a higher order and splits it when order 3 is empty or under pressure --
+`CONFIG_SHUFFLE_PAGE_ALLOCATOR=y` (confirmed on this kernel via `/proc/config.gz`) means a
+large *standing* pool of already-free order-3 blocks is randomized at runtime, so competing
+against thousands of them for one specific just-freed page is a weak position. A freshly split
+block, taken because nothing was waiting in order 3 already, lands on a just-freed target far
+more reliably.
+
+Reading and forcing that state is `cves/lib/base/compaction.h`, not specific to this module --
+any consumer that reclaims a page at a specific order can use it. Two triggers force the
+favorable state, at different privilege levels, both wired into this bench via `--compact` and
+`--compact-madvise N`:
+
+- **`lib_compact_root()`** (root, write-only `/proc/sys/vm/compact_memory`) forces a
+  synchronous, system-wide compaction pass. From a depleted state (orders above 3 empty), this
+  reclaim's landing rate moves from the teens/twenties percent to consistently near-total.
+- **`lib_compact_madvise(mb)`** (`madvise(ptr, len, MADV_COLLAPSE)` on a throwaway anonymous
+  mapping) needs no privilege and forces synchronous compaction of that one mapping through the
+  same kcompactd path. From the same depleted baseline, landing roughly doubles -- weaker than
+  the root trigger because it reaches only the mapping it is given, not the whole system's
+  fragmentation. A single call succeeds up to roughly 64MB and fails with `ENOMEM` above that;
+  repeating it once the state is already compacted adds little further.
+
+`bench_round()` prints `lib_buddyinfo_sum_ge(4)` every round, and `bench_series()` prints the
+full `lib_buddyinfo_line()` before and after each series, so a run's own log carries the
+allocator state a verdict depended on, not just the verdict.
+
 Three further instruments exist for measuring the allocator's own state directly, each a
 port of a specific published technique rather than a guess wearing its name:
 
@@ -202,19 +239,16 @@ port of a specific published technique rather than a guess wearing its name:
 
 `CC_FRAG_BYTES` is an env var this module's own `cc_frag_len()` reads, overriding
 `order_size*2` for every method that calls it (`direct`, `swap`, `stream`,
-`crosscache_content_reclaim`). It exists because the kernel trace above raised an obvious
-question: if `order_size*2` sends extra order-1/order-2 fragments alongside the order-3 one,
-trimming to the exact byte count that sends ONLY the order-3 fragment (36544 on this kernel)
-should waste less work for the same effect. Tested against the real landing rate
-(`--method stream --rounds 20 --nspray 64`, same rounds both arms): the default (65536)
-landed 6/20 (30%); the trimmed exact-fragment size (36544) landed 2/20 (10%) -- worse, not
-better. The "waste" is not waste: `evthist` measured that an isolated 36544-byte send does
-not deterministically touch the zone lock (7 zone-locked events on one call, 0 on the next,
-identical bytes both times), so it does not reliably reach the buddy free area where a
-just-freed target page would be; the extra order-1/order-2 activity in the default size
-appears to force the order-3 request through that same zone lock consistently instead of
-occasionally being satisfied from an unrelated, already-cached per-CPU page. `CC_FRAG_BYTES`
-stays as a research knob -- the default is unchanged, on this evidence, on purpose.
+`crosscache_content_reclaim`). `order_size*2` does not send a single order-matched fragment
+for order 3: it sends extra order-1/order-2 fragments alongside the order-3 one. The extra
+fragments are not waste to trim: an isolated, exact-fragment-only send does not deterministically
+touch the zone lock (`evthist` measures 0 or several zone-locked events for identical calls),
+so it does not reliably reach the buddy free area a just-freed target page would be in, while
+the extra order-1/order-2 activity in the default size appears to force the order-3 request
+through that same zone lock consistently instead of occasionally being satisfied from an
+unrelated, already-cached per-CPU page. Landing rate confirms the direction: the exact-fragment
+size measures lower than the default, not higher. `CC_FRAG_BYTES` stays as a research knob; the
+default formula is unchanged.
 
 None of the four instruments decides anything on its own. Each prints what it measured;
 picking a parameter or a threshold from that output is a step this module leaves to the

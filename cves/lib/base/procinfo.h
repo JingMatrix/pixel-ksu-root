@@ -10,7 +10,9 @@
  *   lib_proc_status_field()  one named field of a process status file
  *
  * /proc/zoneinfo (Node 0 zone Normal spanned pages) is parsed by
- * lib_zone_normal_spanned() in cves/lib/addr/zoneguess.h.
+ * lib_zone_normal_spanned() in cves/lib/addr/zoneguess.h. /proc/buddyinfo
+ * (root-only on this device, unlike the parsers here) and compaction control
+ * are in cves/lib/base/compaction.h.
  */
 #ifndef LIB_PROCINFO_H
 #define LIB_PROCINFO_H

