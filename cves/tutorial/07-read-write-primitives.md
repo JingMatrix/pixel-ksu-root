@@ -246,15 +246,15 @@ The field the recipe glosses over is `page`, and it is the one derivation that c
 page = VMEMMAP_START + (PFN - PHYS_PFN(PHYS_OFFSET)) * sizeof(struct page)
 ```
 
-and all three constants are per-target. On this project's reference device `PHYS_OFFSET` is 0x80000000, so `PHYS_PFN(PHYS_OFFSET)` is 0x80000; `VMEMMAP_START` is 0xfffffffe00000000; and `sizeof(struct page)` is 0x40. A PFN of 0x1c2f3d read out of `/proc/self/pagemap` therefore converts as
+and all three constants are per-target. On the qgki-5.4 A52s target `PHYS_OFFSET` is 0x80000000, so `PHYS_PFN(PHYS_OFFSET)` is 0x80000; `VMEMMAP_START` is 0xfffffffeffe00000; and `sizeof(struct page)` is 0x40. A PFN of 0x1c2f3d read out of `/proc/self/pagemap` therefore converts as
 
 ```
 0x1c2f3d - 0x80000 = 0x142f3d          index into the descriptor array
 0x142f3d * 0x40    = 0x50bcf40         byte offset
-0xfffffffe00000000 + 0x50bcf40 = 0xfffffffe050bcf40
+0xfffffffeffe00000 + 0x50bcf40 = 0xffffffff04ebcf40
 ```
 
-Derive each constant for the target rather than copying these. `sizeof(struct page)` comes from `pahole -F btf -C page ./vmlinux` — do not assume 64, since the size depends on configuration. The start of RAM comes from `su -c 'grep "System RAM" /proc/iomem'` or from the device tree at `/proc/device-tree/memory@*/reg`, and [04-kaslr-and-information-leaks.md](04-kaslr-and-information-leaks.md) covers why it is constant on arm64 and how to confirm it. `VMEMMAP_START` comes from `readelf -s vmlinux.elf | grep -i vmemmap`, or from the arm64 definition in [`arch/arm64/include/asm/memory.h`](https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1/arch/arm64/include/asm/memory.h) for the matching release: it is `-(1 << (VA_BITS - VMEMMAP_SHIFT))`, which for `VA_BITS=39` and 64-byte descriptors gives 0xfffffffe00000000.
+Derive each constant for the target rather than copying these. `sizeof(struct page)` comes from `pahole -F btf -C page ./vmlinux` — do not assume 64, since the size depends on configuration. The start of RAM comes from `su -c 'grep "System RAM" /proc/iomem'` or from the device tree at `/proc/device-tree/memory@*/reg`, and [04-kaslr-and-information-leaks.md](04-kaslr-and-information-leaks.md) covers how to confirm it. For qgki-5.4, derive `VMEMMAP_START` from that kernel's `arch/arm64/include/asm/memory.h`: `VMEMMAP_SIZE = (_PAGE_END(VA_BITS_MIN) - PAGE_OFFSET) >> (PAGE_SHIFT - STRUCT_PAGE_MAX_SHIFT)` and `VMEMMAP_START = -VMEMMAP_SIZE - SZ_2M`. With `VA_BITS=39`, 4K pages, and 64-byte descriptors, these yield a 4-GiB `VMEMMAP_SIZE` and `VMEMMAP_START=0xfffffffeffe00000`.
 
 The subtraction is the part that gets forgotten. The descriptor array is indexed from the *first frame of RAM*, not from PFN 0 — the kernel's own `vmemmap` symbol is `(struct page *)VMEMMAP_START - (memstart_addr >> PAGE_SHIFT)`, with the base already folded in — so a raw pagemap PFN must have `PHYS_PFN(PHYS_OFFSET)` subtracted before it is scaled. Omitting it yields an address that is plausible, in range, and wrong; the conversion lives in one place, `cves/lib/addr/physmap.h`, so this subtraction is applied consistently rather than re-derived per caller.
 

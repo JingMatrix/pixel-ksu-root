@@ -1,0 +1,145 @@
+# entry.ghostlock@qgki-5.4 — GhostLock entry, Samsung QGKI 5.4.
+#
+# Same source set as entry.ghostlock@6.1: LIB_KMI=54 takes the LIB_KMI<66
+# path, every LIB_KMI guard in these sources testing only `< 66` / `>= 66`.
+
+schema = 1
+kind   = "entry"
+id     = "entry.ghostlock@qgki-5.4"
+cve    = "CVE-2026-43499"
+kmi    = ["qgki-5.4"]
+
+composed = true
+status   = "roots on hardware end-to-end. DEFEX safeplace SIGKILLs root execve of /data binaries, so module scripts and Manager ksud calls need the KernelSU-side deferred-exec handling."
+
+# Tunables come from the shared fragments listed below; each fragment's own
+# header states what it covers.
+tunables_from = ["runner/stages/_shared/ghostlock-vehicle-select.toml",
+                 "runner/stages/_shared/ghostlock-vehicle-knobs.toml",
+                 "runner/stages/_shared/ghostlock-vehicle-knobs-pselect.toml"]
+
+[build]
+form    = "preload-so"
+entry   = "constructor"
+sources = [
+  "cves/cve-2026-43499-ghostlock/main.c",
+  "cves/cve-2026-43499-ghostlock/util.c",
+  "cves/cve-2026-43499-ghostlock/util_config.c",
+  "cves/cve-2026-43499-ghostlock/util_addr.c",
+  "cves/lib/rw/nameblob.c",
+  "cves/lib/kaslr/slide_tracefs.c",
+  "cves/cve-2026-43499-ghostlock/fops.c",
+  "cves/cve-2026-43499-ghostlock/fops_pselect.c",
+  "cves/cve-2026-43499-ghostlock/fops_tcp.c",
+  "cves/cve-2026-43499-ghostlock/fops_sigreturn.c",
+  "cves/cve-2026-43499-ghostlock/fops_clone3.c",
+  "cves/cve-2026-43499-ghostlock/fops_process_vm.c",
+  "cves/cve-2026-43499-ghostlock/fops_bpf.c",
+  "cves/cve-2026-43499-ghostlock/fops_mcast.c",
+  "cves/cve-2026-43499-ghostlock/fops_sockopt.c",
+  "cves/cve-2026-43499-ghostlock/pipe.c",
+  "cves/cve-2026-43499-ghostlock/pipe_rw.c",
+  "cves/lib/rw/pipe_rw.c",
+  "cves/lib/spray/crosscache/crosscache.c",
+  "cves/cve-2026-43499-ghostlock/root.c",
+  "cves/lib/root/cred.c",
+  "cves/lib/root/taskscan.c",
+  "cves/lib/root/install_umh.c",
+  "cves/lib/root/handoff.c",
+  "cves/cve-2026-43499-ghostlock/preload.c",
+]
+includes = ["cves/cve-2026-43499-ghostlock", "cves"]
+depends  = ["cves/cve-2026-43499-ghostlock/*.h", "cves/lib/leak/kernelsnitch/*.h",
+            "cves/lib/spray/crosscache/crosscache.h", "cves/lib/rtmutex/*.h",
+            "cves/lib/root/*.h"]
+defines  = ["APP_PAYLOAD=1", "LIB_KMI=54"]
+cflags   = ["-include", "offset.h", "-fPIC", "@OPT@", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-sign-compare"]
+opt      = ["-O2", "-g0"]
+ldflags  = ["-shared", "-pthread", "-Wl,--no-undefined"]
+output   = "cve-2026-43499-ghostlock"
+
+[build.release]
+opt     = ["-Oz", "-g0", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
+           "-ffunction-sections", "-fdata-sections"]
+ldflags = ["-shared", "-pthread", "-Wl,--gc-sections", "-Wl,--icf=all", "-s", "-Wl,--no-undefined"]
+output  = "cve-2026-43499-ghostlock.release"
+
+[facts]
+header = "cves/targets/{target}/target.h"
+requires = [
+  "OFFSET_H", "BUILD_VARIANT_LABEL", "BUILD_FINGERPRINT",
+  "INIT_TASK", "INIT_TASK_OFF",
+  "ASHMEM_MISC_FOPS", "ASHMEM_MISC_FOPS_OFF", "ASHMEM_FOPS", "ASHMEM_IOCTL",
+  "KMALLOC_CACHES", "KMALLOC_CACHES_OFF",
+  "P0_PAGE_OFFSET", "P0_PHYS_OFFSET", "P0_KERNEL_PHYS_LOAD", "KIMAGE_TEXT_BASE",
+  "PIPE_BUFFER_SIZE", "PIPE_BUFFER_SLOTS",
+  "SLIDE_INIT_TASK_IMAGE", "SLIDE_LOGGERS_0_1_IMAGE", "SLIDE_SYSCTL_BOOTID_IMAGE",
+  "TASK_CRED_OFF", "TASK_REAL_CRED_OFF", "CRED_UID_OFF",
+  "SELINUX_ENFORCING", "SECURITY_HOOK_HEADS",
+  "MM_STRUCT_SZ", "KMALLOC_CGROUP_TYPE", "KMALLOC_CACHE_TYPES",
+  "KMALLOC_PIPE_INDEX", "PSELECT_WAITER_WORD_SHIFT",
+  # Read by tcp_gate_check() (fops_tcp.c) at run time; without it that
+  # vehicle's own precondition check cannot answer whether it applies here.
+  "KERNEL_VERSION_CODE",
+]
+forbids = []
+
+[properties]
+retry_safe  = true
+panic_risk  = { pre_slide = "high", post_slide = "low" }
+destructive = ["slide_logger_parent_slot", "ashmem_miscs[0].fops"]
+restores    = ["repair_logger_slot", "restore_fops_ptr_and_owner"]
+provides    = ["CAP_SLIDE", "CAP_KRW_C"]
+requires_caps = []
+retains     = ["CAP_KRW_C"]
+# Confirmed on hardware: OneDrive and YANA each spawn a WebView renderer that
+# can race the live ashmem misc_open collateral window (README, "Collateral")
+# and panic the device. Disabled before the first reboot, restored after.
+disable_apps = ["com.microsoft.skydrive", "de.axelspringer.yana.zeropage"]
+
+# Samsung's DEFEX LSM denies execve outside a fixed path whitelist
+# (defex_rules.c's feature_safeplace_path) once already root. run_late_load()
+# bind-mounts the staged ksud over this path and execs from there instead.
+# procrank: whitelisted, present on this device, and never invoked by Android
+# on its own (no traffic to race). Empty on a target with no DEFEX obstacle --
+# install.sh execs the staged ksud directly.
+defex_shadow_path = "/system/bin/procrank"
+
+# No manager ships a prebuilt kernelsu.ko for qgki-5.4. The custom module
+# (--custom-ksu-module, tools/kernelsu/qgki-5.4/kernelsu.ko) is the path this
+# target actually roots with, so no late-load KMI substitute is needed here.
+late_load_kmi_override = ""
+
+# The shared fops_pselect.c painting routine's word map; entry.ghostlock@6.1
+# states what the fields mean and how the PSELECT_SHIFT window derives.
+[pselect_map]
+nfds = 320
+first_word = 2
+lock_word = 9
+
+[invoke]
+kind = "helper-preload"
+artifact_source = "runner"
+dest = "/data/local/tmp/exploit-payload.so"
+mode = "755"
+command = "cd @DEV_TMP@; @KASLR_ENV@SU_CLIENT_UID=@CLIENT_UID@ SU_APP_UID=@APP_UID@        @DEV_HELPER@ --run-payload @DEV_PAYLOAD@ @DEV_HELPER@ @DEV_LOG@ >/dev/null 2>&1"
+accepts_base = true
+
+[markers]
+pass         = 'slide-kaslr-tracefs-ok pid=[0-9]+ base=[0-9a-f]+'
+gate_fail    = '[A-Z][A-Z0-9_]*_GATE_FAIL'
+restore_pass = '[A-Z][A-Z0-9_]*_RESTORE_PASS'
+restore_bad  = '[A-Z][A-Z0-9_]*_(RESTORE_NOT_PROVEN|RESTORE_UNREACHABLE|RESTORE_FAIL)'
+heartbeat    = '[A-Z][A-Z0-9_]*_HEARTBEAT[[:space:]]+seq=[0-9]+'
+diag         = '(tcp|sigreturn|pselect|clone3|process_vm|bpf) route done=[0-9]+.*'
+diag_count   = 'cfi misses=[0-9]+'
+
+[exit_map]
+
+[provides]
+caps  = ["CAP_SLIDE", "CAP_KRW_C"]
+field = 'base=[0-9a-f]+'
+label = "base"
+
+[[setup]]
+reboot = true

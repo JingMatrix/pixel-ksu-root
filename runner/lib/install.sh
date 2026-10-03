@@ -75,7 +75,7 @@ install_ksu_custom_module() {
   apush_verified "$CUSTOM_KSU_MODULE" "$dev_ko" || return 1
 
   # LATE_LOAD_STAGE_PATH (su.h): the fixed path su_daemon.c's --insmod
-  # request (run_s25u_insmod(), same file) execs from -- install_ksu()'s own
+  # request (run_insmod(), same file) execs from -- install_ksu()'s own
   # late-load branch stages it here too, but that branch does not run for a
   # custom module, so it has to happen here instead.
   local staged="$DEV_TMP/ksud-late-load"
@@ -181,7 +181,7 @@ install_ksu() {
       fi
     fi
     # LATE_LOAD_STAGE_PATH (cve-2026-43499-ghostlock/su.h): the exact path
-    # su_daemon.c's own late-load path (run_s25u_late_load(), triggered below)
+    # su_daemon.c's own late-load path (run_late_load(), triggered below)
     # execs, manufacturer-agnostic. If this target's own recipe stage declares
     # properties.defex_shadow_path (ENTRY_DEFEX_SHADOW_PATH), that path gets
     # this bind-mounted over it first, inside a private mount namespace it
@@ -203,7 +203,7 @@ install_ksu() {
     #
     # su_daemon.c's own client protocol already has the way around this:
     # serve_one() special-cases a request whose only argument is "--late-load"
-    # (run_s25u_late_load(), ported from Root-My-Galaxy's S25U build) into
+    # (run_late_load()) into
     # opening a private mount namespace, bind-mounting $staged onto
     # $ENTRY_DEFEX_SHADOW_PATH -- which *is* on the whitelist -- inside that
     # private namespace only, and exec'ing it from there. That bypass is real
@@ -216,9 +216,9 @@ install_ksu() {
     # an env var on the su client's own environment, which the daemon
     # forwards from request to fork the same way it already does for a
     # normal command. Empty (a target with no such property) makes
-    # run_s25u_late_load() skip the mount and exec $staged directly.
+    # run_late_load() skip the mount and exec $staged directly.
     #
-    # Triggering run_s25u_late_load() at all means calling $DEV_TEMP_SU
+    # Triggering run_late_load() at all means calling $DEV_TEMP_SU
     # directly with that one argument -- NOT through asu, whose
     # `-c "<cmd>"` wrapping sends a different argv shape that would not
     # match serve_one()'s check.
@@ -292,8 +292,8 @@ install_ksu() {
   # logcat under its own tag, never to dmesg (dmesg is kernel printk only;
   # this is a userspace app's log). The block above has never once shown
   # anything but unrelated wlan/icnss noise because of that mismatch.
-  err "  ksud's own log (logcat tag \"KernelSU Next\"), if it said anything:"
-  "${ADB[@]}" logcat -d -s "KernelSU Next:V" 2>/dev/null | tail -40 | strip \
+  err "  ksud's own log (logcat tag \"KernelSU\"), if it said anything:"
+  "${ADB[@]}" logcat -d -s "KernelSU:V" 2>/dev/null | tail -40 | strip \
     | while read -r l; do [ -n "$l" ] && err "    $l"; done
   return 1
 }
